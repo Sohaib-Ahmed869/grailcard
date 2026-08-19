@@ -1,0 +1,68 @@
+import cv2
+import numpy as np
+
+from app.pipeline import run_pipeline
+from app.pipeline.centering import measure_centering
+from app.pipeline.detect import detect_card
+from app.pipeline.grade import compute_grade
+from synth import make_card_photo
+
+
+def _grade(photo):
+    det = detect_card(photo)
+    assert det is not None
+    return compute_grade(det.warped, measure_centering(det.warped))
+
+
+def test_clean_card_grades_high():
+    g = _grade(make_card_photo(lr=50, tb=50))
+    assert g.overall >= 8.5
+    assert g.band_low < g.overall < g.band_high or g.band_high == 10.0
+    assert g.centering is not None and g.centering.value >= 9.5
+    assert g.corners.value >= 9.0
+    assert g.edges.value >= 9.0
+
+
+def test_off_center_card_capped_by_centering():
+    clean = _grade(make_card_photo(lr=50, tb=50))
+    off = _grade(make_card_photo(lr=72, tb=50))
+    assert off.centering.value < clean.centering.value
+    assert off.overall < clean.overall
+
+
+def test_worn_corner_lowers_corner_grade():
+    photo = make_card_photo(lr=50, tb=50)
+    det = detect_card(photo)
+    # simulate exposed cardboard at the corner directly on the warped crop
+    worn = det.warped.copy()
+    cv2.circle(worn, (8, 8), 26, (110, 115, 122), -1)
+    g_clean = compute_grade(det.warped, measure_centering(det.warped))
+    g_worn = compute_grade(worn, measure_centering(worn))
+    assert g_worn.corners.value < g_clean.corners.value
+
+
+def test_scratch_lowers_surface_grade():
+    photo = make_card_photo(lr=50, tb=50)
+    det = detect_card(photo)
+    scratched = det.warped.copy()
+    cv2.line(scratched, (150, 200), (600, 700), (255, 255, 255), 2)
+    g_clean = compute_grade(det.warped, measure_centering(det.warped))
+    g_scr = compute_grade(scratched, measure_centering(scratched))
+    assert g_scr.surface.value < g_clean.surface.value
+
+
+def test_pipeline_carries_grade_and_authenticity():
+    result = run_pipeline(make_card_photo(lr=60, tb=45))
+    assert result["ok"] is True
+    g = result["grade"]
+    assert 1.0 <= g["overall"] <= 10.0
+    assert g["band"]["low"] <= g["overall"] <= g["band"]["high"]
+    assert set(g["subgrades"]) == {"centering", "corners", "edges", "surface"}
+    assert g["method"] == "heuristic-v0"
+    assert result["authenticity"] is not None
+    assert "digitalLikely" in result["authenticity"]
+
+
+def test_render_flagged_as_digital():
+    result = run_pipeline(cv2.imread("tests/fixtures/slowbro_render.png"))
+    assert result["authenticity"]["digitalLikely"] is True

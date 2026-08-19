@@ -1,0 +1,16 @@
+{
+  "name": "grailcard",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace apps/api",
+    "dev:web": "npm run dev --workspace apps/web",
+    "dev:vision": "services/vision/.venv/Scripts/python -m uvicorn app.main:app --app-dir services/vision --port 8100 --reload",
+    "build": "npm run build --workspaces --if-present",
+    "test:vision": "services/vision/.venv/Scripts/python -m pytest services/vision/tests -q"
+  }
+}

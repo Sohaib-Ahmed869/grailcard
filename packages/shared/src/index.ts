@@ -1,0 +1,275 @@
+import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// The scan record is the single contract between web, api, and vision.
+// The vision service mirrors these shapes in Pydantic (services/vision/app/schemas.py).
+// ---------------------------------------------------------------------------
+
+export const CaptureKind = z.enum([
+  "front",
+  "back",
+  "corner_tl",
+  "corner_tr",
+  "corner_bl",
+  "corner_br",
+]);
+export type CaptureKind = z.infer<typeof CaptureKind>;
+
+export const CaptureQuality = z.object({
+  blurScore: z.number(), // Laplacian variance on the card crop; higher = sharper
+  glarePct: z.number(), // % of card pixels inside specular clusters
+  glareRegions: z
+    .array(z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }))
+    .default([]),
+  cardAreaPct: z.number(), // card quad area / image area
+  resolutionOk: z.boolean(), // warped card meets minimum pixel density
+  lowDetail: z.boolean().default(false), // graded, but from a small card image
+});
+export type CaptureQuality = z.infer<typeof CaptureQuality>;
+
+export const Capture = z.object({
+  kind: CaptureKind,
+  imageKey: z.string(),
+  quality: CaptureQuality.nullish(),
+});
+export type Capture = z.infer<typeof Capture>;
+
+export const RejectionReason = z.enum([
+  "card_not_found",
+  "too_blurry",
+  "too_much_glare",
+  "card_too_small",
+  "resolution_too_low",
+]);
+export type RejectionReason = z.infer<typeof RejectionReason>;
+
+export const Rejection = z.object({
+  reason: RejectionReason,
+  userMessage: z.string(), // plain-language explanation
+  retryHint: z.string(), // concrete instruction: "tilt the card ~15° away from the light"
+});
+export type Rejection = z.infer<typeof Rejection>;
+
+// Centering: a measurement, not an opinion. Ratios are left/top share in percent,
+// e.g. lr = 52 means 52/48 left/right.
+export const SideCentering = z.object({
+  lr: z.number(),
+  tb: z.number(),
+  measurable: z.boolean(), // false for borderless / full-art
+});
+export type SideCentering = z.infer<typeof SideCentering>;
+
+export const CenteringMeasurement = z.object({
+  front: SideCentering,
+  back: SideCentering.nullish(),
+  // PSA standards: 10 requires ~60/40 or better front; 9 allows ~65/35 front.
+  passesAt: z.object({ psa10: z.boolean(), psa9: z.boolean() }),
+  overlayImageKey: z.string().nullish(), // annotated image showing measured border lines
+});
+export type CenteringMeasurement = z.infer<typeof CenteringMeasurement>;
+
+export const Measurement = z.object({
+  centering: CenteringMeasurement,
+  confidence: z.object({ centering: z.number().min(0).max(1) }),
+});
+export type Measurement = z.infer<typeof Measurement>;
+
+// What the OCR read off the card front (vision-service output)
+export const OcrReading = z.object({
+  nameCandidates: z.array(z.string()),
+  collectorNumber: z.string().nullish(), // "031/064"
+  setCode: z.string().nullish(), // "OP07-109" — exact id even on Japanese cards
+  slab: z
+    .object({
+      company: z.string(), // PSA | BGS | CGC | ...
+      gradeText: z.string(), // "GEM MT 10"
+      certNumber: z.string().nullish(),
+    })
+    .nullish(),
+  texts: z.array(z.string()),
+  language: z.enum(["en", "ja", "unknown"]).default("unknown"),
+  japaneseTextDetected: z.boolean().default(false),
+});
+export type OcrReading = z.infer<typeof OcrReading>;
+
+// Catalog match (TCGdex), resolved by the API from the OCR reading
+export const Identification = z.object({
+  cardId: z.string(), // tcgdex id, e.g. "me05-031"
+  name: z.string(),
+  setId: z.string(),
+  setName: z.string(),
+  localId: z.string(),
+  rarity: z.string().nullish(),
+  imageUrl: z.string().nullish(), // official card render
+  matchScore: z.number(), // 0..1 name-similarity of the accepted match
+  ocrName: z.string(), // what we actually read, shown for honesty
+  game: z.string().default("pokemon"), // pokemon | mtg | yugioh
+});
+export type Identification = z.infer<typeof Identification>;
+
+export const GradedPrices = z.object({
+  source: z.string(), // "pokemonpricetracker" (eBay sales averages)
+  psa8: z.number().nullish(),
+  psa9: z.number().nullish(),
+  psa10: z.number().nullish(),
+});
+export type GradedPrices = z.infer<typeof GradedPrices>;
+
+export const Valuation = z.object({
+  source: z.string(),
+  updatedAt: z.string().nullish(),
+  graded: GradedPrices.nullish(),
+  // market price × condition multiplier derived from the grade estimate —
+  // what THIS copy is plausibly worth raw, not a near-mint copy
+  conditionAdjusted: z
+    .object({ value: z.number(), multiplier: z.number() })
+    .nullish(),
+  tcgplayer: z
+    .object({
+      unit: z.string(),
+      variant: z.string(), // holofoil | normal | reverseHolofoil
+      low: z.number().nullish(),
+      mid: z.number().nullish(),
+      high: z.number().nullish(),
+      market: z.number().nullish(),
+    })
+    .nullish(),
+  cardmarket: z
+    .object({
+      unit: z.string(),
+      low: z.number().nullish(),
+      trend: z.number().nullish(),
+      avg30: z.number().nullish(),
+    })
+    .nullish(),
+});
+export type Valuation = z.infer<typeof Valuation>;
+
+export const Subgrade = z.object({
+  value: z.number(),
+  confidence: z.number().min(0).max(1),
+});
+export type Subgrade = z.infer<typeof Subgrade>;
+
+export const Grade = z.object({
+  overall: z.number(),
+  band: z.object({ low: z.number(), high: z.number() }),
+  subgrades: z.object({
+    // null = honestly not assessable on this card (full-bleed art, etc.)
+    centering: Subgrade.nullish(),
+    corners: Subgrade.nullish(),
+    edges: Subgrade.nullish(),
+    surface: Subgrade,
+  }),
+  findings: z
+    .object({
+      scratchesDetected: z.boolean(),
+      clusterCount: z.number(),
+      clusters: z.array(
+        z.object({
+          x: z.number(),
+          y: z.number(),
+          w: z.number(),
+          h: z.number(),
+          areaPx: z.number(),
+        }),
+      ),
+      defectFrac: z.number(),
+    })
+    .nullish(),
+  method: z.string(), // "heuristic-v0" until trained analyzers land
+  notes: z.array(z.string()),
+});
+export type Grade = z.infer<typeof Grade>;
+
+export const Origin = z.object({
+  language: z.enum(["en", "ja", "unknown"]),
+  japaneseTextDetected: z.boolean(),
+  note: z.string(),
+});
+export type Origin = z.infer<typeof Origin>;
+
+export const Recommendation = z.object({
+  verdict: z.enum(["grade", "dont_grade", "insufficient_data"]),
+  reasoning: z.string(),
+  gradingCost: z.number(),
+  rawValue: z.number().nullish(),
+  likelyGrade: z.string().nullish(), // "PSA 9"
+  rows: z.array(
+    z.object({
+      grade: z.string(), // "PSA 10"
+      value: z.number().nullish(),
+      net: z.number().nullish(), // value - raw - grading cost
+      inBand: z.boolean(), // falls inside the estimated grade band
+    }),
+  ),
+});
+export type Recommendation = z.infer<typeof Recommendation>;
+
+export const Authenticity = z.object({
+  digitalLikely: z.boolean(),
+  noiseFloor: z.number(),
+});
+export type Authenticity = z.infer<typeof Authenticity>;
+
+export const ScanStatus = z.enum(["captured", "processing", "rejected", "analyzed", "failed"]);
+export type ScanStatus = z.infer<typeof ScanStatus>;
+
+export const Scan = z.object({
+  id: z.string(),
+  status: ScanStatus,
+  createdAt: z.string(),
+  captures: z.array(Capture),
+  rejection: Rejection.nullish(),
+  backRejection: Rejection.nullish(), // back photo failed the gate; front result stands
+  measurement: Measurement.nullish(),
+  grade: Grade.nullish(),
+  authenticity: Authenticity.nullish(),
+  identification: Identification.nullish(),
+  valuation: Valuation.nullish(),
+  origin: Origin.nullish(),
+  recommendation: Recommendation.nullish(),
+  // what OCR read as possible names — shown when no catalog match is found
+  ocrNames: z.array(z.string()).nullish(),
+  // human-readable condition summary composed from the measurements
+  summary: z.string().nullish(),
+  // sibling cards from the same set, with live prices (free catalog APIs)
+  related: z
+    .array(
+      z.object({
+        name: z.string(),
+        localId: z.string(),
+        imageUrl: z.string().nullish(),
+        price: z.number().nullish(),
+        unit: z.string(),
+      }),
+    )
+    .nullish(),
+  // detected grading-company slab (card is already professionally graded)
+  slab: z
+    .object({
+      company: z.string(),
+      gradeText: z.string(),
+      certNumber: z.string().nullish(),
+      verifyUrl: z.string().nullish(),
+    })
+    .nullish(),
+});
+export type Scan = z.infer<typeof Scan>;
+
+// ---------------------------------------------------------------------------
+// Vision service HTTP contract (api -> vision)
+// ---------------------------------------------------------------------------
+
+export const VisionAnalyzeResponse = z.object({
+  ok: z.boolean(),
+  quality: CaptureQuality.nullish(),
+  rejection: Rejection.nullish(),
+  measurement: Measurement.nullish(),
+  grade: Grade.nullish(),
+  authenticity: Authenticity.nullish(),
+  ocr: OcrReading.nullish(), // present when a card was detected (front only)
+  warpedImageB64: z.string().nullish(), // canonical 750x1050 crop, png
+  overlayImageB64: z.string().nullish(), // centering annotation, png
+});
+export type VisionAnalyzeResponse = z.infer<typeof VisionAnalyzeResponse>;
