@@ -168,7 +168,38 @@ export class ScansService {
         ])
       ).filter((m): m is NonNullable<typeof m> => m != null);
       matches.sort((a, b) => b.identification.matchScore - a.identification.matchScore);
-      const match = matches[0];
+      let match = matches[0];
+
+      // arbitration: anything short of a near-certain catalog match
+      // ("LARA" -> Pokemon's "Klara" scored 0.86) gets a second opinion from
+      // the vision LLM; a different game verdict means false positive — drop it
+      if (match && match.identification.matchScore < 0.93) {
+        const opinion = await identifyWithGemini(
+          front.buffer.toString("base64"),
+          front.mimetype,
+        );
+        if (opinion && opinion.game !== match.identification.game) {
+          match = undefined as unknown as typeof match;
+          scan.identification = {
+            cardId: "llm",
+            name: opinion.name,
+            setId: "",
+            setName:
+              [opinion.setName, opinion.edition].filter(Boolean).join(" · ") || "Unknown set",
+            localId: "",
+            rarity: null,
+            imageUrl: null,
+            matchScore: 0.6,
+            ocrName: names[0] ?? "(from image)",
+            game: opinion.game,
+          };
+        } else if (!opinion && match.identification.matchScore < 0.72) {
+          // no second opinion available and the match is weak — asserting it
+          // would be guessing. Fall through to the described-from-text path.
+          match = undefined as unknown as typeof match;
+        }
+      }
+
       if (match) {
         scan.identification = match.identification;
         scan.valuation = match.valuation;
@@ -182,7 +213,7 @@ export class ScansService {
             scan.valuation.graded = graded;
           }
         }
-      } else {
+      } else if (!scan.identification) {
         // catalogs failed — ask the vision LLM to NAME the card (identification
         // only, never condition or price). If it names a catalog-supported
         // game, loop the name back through the real catalog for verified data.
@@ -228,9 +259,10 @@ export class ScansService {
         // clearly labeled as such (matchScore 0 = described, not matched)
         const allText = (frontRes.ocr.texts ?? []).join(" ");
         const brands = BRAND_HINTS.filter(([re]) => re.test(allText)).map(([, b]) => b);
-        // name banners are usually printed in caps — prefer an all-caps candidate
-        const pick =
-          names.find((n) => n === n.toUpperCase() && /[A-Z]{3,}/.test(n)) ?? names[0];
+        // name banners are usually caps, and person/card names are usually
+        // multi-word — prefer multi-word caps over single logo words
+        const caps = names.filter((n) => n === n.toUpperCase() && /[A-Z]{3,}/.test(n));
+        const pick = caps.find((n) => n.trim().split(/\s+/).length >= 2) ?? caps[0] ?? names[0];
         scan.identification = {
           cardId: "described",
           name: titleCase(pick),

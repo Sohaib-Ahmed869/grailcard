@@ -1,7 +1,7 @@
 import type { Identification, OcrReading, Valuation } from "@grailcard/shared";
 
 const TCGDEX = process.env.TCGDEX_URL ?? "https://api.tcgdex.net/v2/en";
-const MIN_MATCH_SCORE = 0.45;
+const MIN_MATCH_SCORE = 0.6;
 
 type TcgdexBrief = { id: string; localId: string; name: string; image?: string };
 
@@ -120,6 +120,7 @@ export async function identifyCard(
 
   // visual cross-check: dHash the scan against the top candidates' images.
   // Confirms the name match and separates same-name cards from different sets.
+  let bestVisual: number | null = null;
   if (warpedImageB64 && ranked.length > 0) {
     const urlOf = (c: TcgdexBrief) => (c.image ? `${c.image}/low.png` : null);
     const urls = ranked.map((r) => urlOf(r.card)).filter((u): u is string => !!u);
@@ -129,14 +130,18 @@ export async function identifyCard(
         .map((r) => {
           const url = urlOf(r.card);
           const sim = url ? visual.get(url) : undefined;
-          return sim == null ? r : { ...r, score: 0.7 * r.score + 0.3 * sim };
+          return sim == null ? r : { ...r, score: 0.7 * r.score + 0.3 * sim, visual: sim };
         })
         .sort((a, b) => b.score - a.score);
+      bestVisual = (ranked[0] as any).visual ?? null;
     }
   }
 
   const best = ranked[0] ?? null;
   if (!best || best.score < MIN_MATCH_SCORE) return null;
+  // a partial name hit ("LARA" -> Pokemon's "Klara") whose image looks
+  // NOTHING like the candidate is a false positive, not a match
+  if (bestVisual != null && bestVisual < 0.55 && best.score < 0.9) return null;
 
   const detail = (await fetchJson(`${TCGDEX}/cards/${best.card.id}`)) as {
     set?: { id: string; name: string };

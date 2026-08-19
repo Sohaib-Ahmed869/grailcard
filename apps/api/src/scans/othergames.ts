@@ -1,7 +1,7 @@
 import type { Identification, Valuation } from "@grailcard/shared";
 import { bestAgainst } from "./similarity.js";
 
-const MIN_SCORE = 0.5;
+const MIN_SCORE = 0.6;
 
 export type CatalogMatch = {
   identification: Identification;

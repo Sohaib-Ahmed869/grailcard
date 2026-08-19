@@ -109,18 +109,32 @@ def read_card_text(warped: np.ndarray) -> dict:
         "language": "unknown",
         "japaneseTextDetected": False,
     }
-    try:
-        result, _ = _engine()(warped)
-    except Exception:
-        # OCR can fail under memory pressure — free what we can and retry
-        # once before degrading to "unknown card" (grading still completes)
-        import gc
-
-        gc.collect()
+    def _run(img):
         try:
-            result, _ = _engine()(warped)
+            r, _ = _engine()(img)
+            return r or []
         except Exception:
-            return empty
+            # OCR can fail under memory pressure — free what we can, retry once
+            import gc
+
+            gc.collect()
+            try:
+                r, _ = _engine()(img)
+                return r or []
+            except Exception:
+                return []
+
+    result = _run(warped)
+    # landscape-designed cards arrive rotated to portrait, making their text
+    # vertical and unreadable — if the pass reads almost nothing, retry the
+    # other orientation and keep whichever read more
+    if sum(len(r[1]) for r in result) < 25:
+        rotated = cv2.rotate(warped, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        alt = _run(rotated)
+        if sum(len(r[1]) for r in alt) > sum(len(r[1]) for r in result):
+            result = alt
+            warped = rotated
+            h, w = warped.shape[:2]
     if not result:
         return empty
 
@@ -176,13 +190,14 @@ def read_card_text(warped: np.ndarray) -> dict:
     ]
     top_band.sort(key=lambda t: t["height"], reverse=True)
 
-    # not every game puts the name at the top (Top Trumps banners it mid-card):
-    # also consider unusually large name-like text in the upper 60%
+    # not every game puts the name at the top (Top Trumps banners it mid-card,
+    # sports cards often print it at the bottom): also consider unusually
+    # large name-like text anywhere on the card
     tallest = top_band[0]["height"] if top_band else 0.0
     banners = [
         t
         for t in texts
-        if 0.15 <= t["top"] < 0.60
+        if 0.15 <= t["top"] < 0.92
         and t["score"] > 0.6
         and _is_name_like(t["text"])
         and t["height"] >= max(tallest, 0.02)

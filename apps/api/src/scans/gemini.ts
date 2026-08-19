@@ -4,7 +4,9 @@
 // never asked for condition, grades, or prices — those come from measurement,
 // trained CV, and real market feeds only.
 
-const MODEL = "gemini-flash-latest";
+// primary + fallback: the free tier 503s under load, and the lite model
+// usually has spare capacity when flash doesn't
+const MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
 
 export type LlmIdentification = {
   name: string;
@@ -29,28 +31,33 @@ export async function identifyWithGemini(
   if (!key) return null;
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: PROMPT },
-                { inline_data: { mime_type: mimeType, data: imageB64 } },
-              ],
-            },
-          ],
-          generationConfig: { responseMimeType: "application/json", temperature: 0 },
-        }),
-        signal: AbortSignal.timeout(30000),
-      },
-    );
-    if (!res.ok) return null;
-    const body = (await res.json()) as Record<string, any>;
-    const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
+    let text: string | undefined;
+    for (const model of MODELS) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: PROMPT },
+                  { inline_data: { mime_type: mimeType, data: imageB64 } },
+                ],
+              },
+            ],
+            generationConfig: { responseMimeType: "application/json", temperature: 0 },
+          }),
+          signal: AbortSignal.timeout(30000),
+        },
+      );
+      if (res.ok) {
+        const body = (await res.json()) as Record<string, any>;
+        text = body.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) break;
+      }
+    }
     if (!text) return null;
     const parsed = JSON.parse(text) as Record<string, unknown>;
     if (typeof parsed.name !== "string" || parsed.name.length < 2) return null;
