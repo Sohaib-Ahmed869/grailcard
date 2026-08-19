@@ -44,12 +44,40 @@ def run_pipeline(
     ocr = read_card_text(det.warped) if (det is not None and read_text) else None
 
     if gate.rejection is not None:
+        # the photo failed the gate, but if a card was detected we can still
+        # offer a PROVISIONAL impression — clearly labeled, never charged,
+        # never sent to the paid grader
+        grade_dict = None
+        if det is not None:
+            cen = measure_centering(det.warped)
+            grade = compute_grade(det.warped, cen, low_detail=True)
+            sub = lambda s: {"value": s.value, "confidence": round(s.confidence * 0.5, 2)} if s else None
+            grade_dict = {
+                "overall": grade.overall,
+                "band": {
+                    "low": max(1.0, grade.band_low - 1.0),
+                    "high": min(10.0, grade.band_high + 1.0),
+                },
+                "subgrades": {
+                    "centering": sub(grade.centering),
+                    "corners": sub(grade.corners),
+                    "edges": sub(grade.edges),
+                    "surface": sub(grade.surface),
+                },
+                "findings": grade.findings,
+                "method": "heuristic-v0-provisional",
+                "notes": [
+                    f"PROVISIONAL — this photo failed the quality gate ({gate.rejection['reason']}). "
+                    "Treat this as a rough impression, not an estimate; re-shoot for a real grade."
+                ]
+                + grade.notes,
+            }
         return {
             "ok": False,
             "quality": _quality_dict(gate.quality) if det is not None else None,
             "rejection": gate.rejection,
             "measurement": None,
-            "grade": None,
+            "grade": grade_dict,
             "authenticity": digital_source_check(det.warped) if det is not None else None,
             "ocr": ocr,
             "warpedImageB64": _b64_png(det.warped) if include_images and det else None,

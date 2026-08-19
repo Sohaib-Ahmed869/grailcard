@@ -430,6 +430,12 @@ function GradePanel({ scan }: { scan: Scan }) {
   if (!g) return null;
   return (
     <div className="panel">
+      {scan.status === "rejected" && (
+        <div style={{ marginBottom: 10 }}>
+          <span className="badge warn">provisional — photo failed the quality gate</span>
+          <span className="muted small"> a rough impression only; re-shoot for a real grade</span>
+        </div>
+      )}
       <div className="grade-viz">
         <div>
           <GradeGauge overall={g.overall} band={g.band} />
