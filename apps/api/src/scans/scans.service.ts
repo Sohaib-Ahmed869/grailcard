@@ -6,7 +6,14 @@ import type { Scan, VisionAnalyzeResponse } from "@grailcard/shared";
 import { db } from "../db.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchGradedPrices } from "./gradedprices.js";
-import { identifyOnePiece, identifyScryfall, identifyYgo } from "./othergames.js";
+import {
+  identifyDigimon,
+  identifyLorcana,
+  identifyOnePiece,
+  identifyScryfall,
+  identifySwu,
+  identifyYgo,
+} from "./othergames.js";
 import { buildRecommendation, conditionMultiplier } from "./recommend.js";
 import { fetchRelated } from "./related.js";
 import { buildSummary } from "./summarize.js";
@@ -165,6 +172,9 @@ export class ScansService {
           identifyScryfall(names),
           identifyYgo(names),
           identifyOnePiece(frontRes.ocr.setCode),
+          identifyLorcana(names),
+          identifyDigimon(names),
+          identifySwu(names),
         ])
       ).filter((m): m is NonNullable<typeof m> => m != null);
       matches.sort((a, b) => b.identification.matchScore - a.identification.matchScore);
@@ -234,7 +244,13 @@ export class ScansService {
                 ? await identifyScryfall([llm.name])
                 : llm.game === "yugioh"
                   ? await identifyYgo([llm.name])
-                  : null;
+                  : llm.game === "lorcana"
+                    ? await identifyLorcana([llm.name])
+                    : llm.game === "digimon"
+                      ? await identifyDigimon([llm.name])
+                      : llm.game === "starwars"
+                        ? await identifySwu([llm.name])
+                        : null;
           if (verified) {
             scan.identification = verified.identification;
             scan.valuation = verified.valuation;

@@ -66,6 +66,119 @@ export async function identifyScryfall(names: string[]): Promise<CatalogMatch | 
   return { identification, valuation };
 }
 
+/** Disney Lorcana via Lorcast (free, no key, includes USD prices). */
+export async function identifyLorcana(names: string[]): Promise<CatalogMatch | null> {
+  if (names.length === 0) return null;
+  const body = (await fetchJson(
+    `https://api.lorcast.com/v0/cards/search?q=${encodeURIComponent(names[0])}`,
+  )) as any;
+  const cards = (body?.results ?? []) as any[];
+  let best: { card: any; score: number; name: string } | null = null;
+  for (const card of cards.slice(0, 30)) {
+    const full = [card.name, card.version].filter(Boolean).join(" ");
+    const m = bestAgainst(names, full);
+    if (!best || m.score > best.score) best = { card, score: m.score, name: m.name };
+  }
+  if (!best || best.score < MIN_SCORE) return null;
+  const c = best.card;
+  const usd = c.prices?.usd ? Number(c.prices.usd) : null;
+  return {
+    identification: {
+      cardId: `lorcana-${c.id}`,
+      name: [c.name, c.version].filter(Boolean).join(" — "),
+      setId: c.set?.code ?? "",
+      setName: c.set?.name ?? "",
+      localId: String(c.collector_number ?? ""),
+      rarity: c.rarity ?? null,
+      imageUrl: c.image_uris?.digital?.normal ?? c.image_uris?.digital?.small ?? null,
+      matchScore: Math.min(best.score, 1),
+      ocrName: best.name,
+      game: "lorcana",
+    },
+    valuation:
+      usd != null
+        ? {
+            source: "lorcast",
+            updatedAt: null,
+            tcgplayer: { unit: "USD", variant: "normal", low: null, mid: null, high: null, market: usd },
+            cardmarket: null,
+          }
+        : null,
+  };
+}
+
+/** Digimon Card Game via digimoncard.io (free, no key, no prices). */
+export async function identifyDigimon(names: string[]): Promise<CatalogMatch | null> {
+  if (names.length === 0) return null;
+  const body = await fetchJson(
+    `https://digimoncard.io/api-public/search.php?n=${encodeURIComponent(names[0])}`,
+  );
+  const cards = (Array.isArray(body) ? body : []) as any[];
+  let best: { card: any; score: number; name: string } | null = null;
+  for (const card of cards.slice(0, 30)) {
+    const m = bestAgainst(names, card.name as string);
+    if (!best || m.score > best.score) best = { card, score: m.score, name: m.name };
+  }
+  if (!best || best.score < MIN_SCORE) return null;
+  const c = best.card;
+  return {
+    identification: {
+      cardId: `digimon-${c.id}`,
+      name: c.name,
+      setId: String(c.id ?? "").split("-")[0],
+      setName: String(c.id ?? "").split("-")[0],
+      localId: String(c.id ?? ""),
+      rarity: c.rarity ?? null,
+      imageUrl: c.id ? `https://images.digimoncard.io/images/cards/${c.id}.jpg` : null,
+      matchScore: Math.min(best.score, 1),
+      ocrName: best.name,
+      game: "digimon",
+    },
+    valuation: null,
+  };
+}
+
+/** Star Wars: Unlimited via swu-db (free, no key, includes market prices). */
+export async function identifySwu(names: string[]): Promise<CatalogMatch | null> {
+  if (names.length === 0) return null;
+  const body = (await fetchJson(
+    `https://api.swu-db.com/cards/search?q=${encodeURIComponent(names[0])}`,
+  )) as any;
+  const cards = (body?.data ?? []) as any[];
+  let best: { card: any; score: number; name: string } | null = null;
+  for (const card of cards.slice(0, 30)) {
+    const full = [card.Name, card.Subtitle].filter(Boolean).join(" ");
+    const m = bestAgainst(names, full);
+    if (!best || m.score > best.score) best = { card, score: m.score, name: m.name };
+  }
+  if (!best || best.score < MIN_SCORE) return null;
+  const c = best.card;
+  const market = c.MarketPrice != null ? Number(c.MarketPrice) : null;
+  return {
+    identification: {
+      cardId: `swu-${c.Set}-${c.Number}`,
+      name: [c.Name, c.Subtitle].filter(Boolean).join(" — "),
+      setId: c.Set ?? "",
+      setName: c.Set ?? "",
+      localId: String(c.Number ?? ""),
+      rarity: c.Rarity ?? null,
+      imageUrl: c.FrontArt ?? null,
+      matchScore: Math.min(best.score, 1),
+      ocrName: best.name,
+      game: "starwars",
+    },
+    valuation:
+      market != null && Number.isFinite(market)
+        ? {
+            source: "swu-db",
+            updatedAt: null,
+            tcgplayer: { unit: "USD", variant: "normal", low: null, mid: null, high: null, market },
+            cardmarket: null,
+          }
+        : null,
+  };
+}
+
 /** One Piece TCG via optcgapi (free, no key). Looked up by the set code
  *  printed on the card (e.g. OP07-109), which works even on Japanese
  *  printings where the name can't be OCR'd. */

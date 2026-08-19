@@ -501,6 +501,9 @@ const GAME_LABELS: Record<string, string> = {
   mtg: "Magic: The Gathering",
   yugioh: "Yu-Gi-Oh!",
   onepiece: "One Piece TCG",
+  lorcana: "Disney Lorcana",
+  digimon: "Digimon Card Game",
+  starwars: "Star Wars: Unlimited",
   sports: "Sports card",
   other: "Other card",
 };
