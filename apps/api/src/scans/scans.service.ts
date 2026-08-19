@@ -4,7 +4,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Scan, VisionAnalyzeResponse } from "@grailcard/shared";
 import { db } from "../db.js";
+import { identifyApiTcg } from "./apitcg.js";
 import { identifyWithGemini } from "./gemini.js";
+import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices } from "./gradedprices.js";
 import {
   identifyDigimon,
@@ -175,6 +177,7 @@ export class ScansService {
           identifyLorcana(names),
           identifyDigimon(names),
           identifySwu(names),
+          identifyApiTcg(names),
         ])
       ).filter((m): m is NonNullable<typeof m> => m != null);
       matches.sort((a, b) => b.identification.matchScore - a.identification.matchScore);
@@ -297,6 +300,16 @@ export class ScansService {
     // sibling cards from the same set with live prices (free, best-effort)
     if (scan.identification && scan.identification.cardId !== "described") {
       scan.related = await fetchRelated(scan.identification);
+    }
+
+    // price gap-fill: catalogs without prices (Digimon, Union Arena...) get
+    // them from JustTCG when its free key is present
+    if (scan.identification && !scan.valuation?.tcgplayer && !scan.valuation?.cardmarket) {
+      const filled = await fetchJustTcgPrice(
+        scan.identification.name,
+        scan.identification.game,
+      );
+      if (filled) scan.valuation = { ...filled, graded: scan.valuation?.graded ?? null };
     }
 
     // market prices are near-mint; adjust to THIS copy's estimated condition

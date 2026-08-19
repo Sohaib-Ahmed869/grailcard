@@ -505,6 +505,10 @@ const GAME_LABELS: Record<string, string> = {
   digimon: "Digimon Card Game",
   starwars: "Star Wars: Unlimited",
   sports: "Sports card",
+  unionarena: "Union Arena",
+  dragonball: "Dragon Ball Fusion",
+  gundam: "Gundam Card Game",
+  riftbound: "Riftbound",
   other: "Other card",
 };
 
@@ -678,6 +682,34 @@ function FindingsLine({ scan }: { scan: Scan }) {
   );
 }
 
+function ebaySoldUrl(query: string) {
+  return `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(query)}&LH_Sold=1&LH_Complete=1`;
+}
+
+function EbayComps({ scan }: { scan: Scan }) {
+  const idn = scan.identification;
+  if (!idn) return null;
+  const base = [idn.name, idn.setName, idn.localId].filter(Boolean).join(" ");
+  return (
+    <div className="panel">
+      <div className="muted" style={{ marginBottom: 6 }}>
+        eBay sold listings <span className="small">(real completed sales — the ground truth)</span>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <a className="ebay-link" href={ebaySoldUrl(base)} target="_blank" rel="noreferrer">
+          Raw sold listings →
+        </a>
+        <a className="ebay-link" href={ebaySoldUrl(`${base} PSA`)} target="_blank" rel="noreferrer">
+          PSA graded sold →
+        </a>
+        <a className="ebay-link" href={ebaySoldUrl(`${base} PSA 10`)} target="_blank" rel="noreferrer">
+          PSA 10 sold →
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function ValuationPanel({ scan }: { scan: Scan }) {
   const v = scan.valuation;
   if (!v) return null;
@@ -841,6 +873,7 @@ function Result({ scan }: { scan: Scan }) {
         )
       )}
       {scan.status === "rejected" && <ValuationPanel scan={scan} />}
+      <EbayComps scan={scan} />
       {scan.related && scan.related.length > 0 && (
         <div className="panel">
           <div className="muted" style={{ marginBottom: 10 }}>
