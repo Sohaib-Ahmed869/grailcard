@@ -68,23 +68,26 @@ export function buildRecommendation(
   const likelyNet = likelyRow?.net ?? null;
   const worstNet = lowRow?.net ?? null;
 
-  // grade when the likely outcome clearly pays and even the low end of the
-  // band doesn't lose money
-  const verdict =
-    likelyNet != null && likelyNet > Math.max(10, raw * 0.15) && (worstNet ?? 0) >= 0
-      ? "grade"
-      : "dont_grade";
+  // grade when the likely outcome clearly pays AND the low end of the band
+  // risks only a small fraction of that upside (risking $50 to make $700 is
+  // a good trade; risking $50 to make $60 is not)
+  const upsideOk = likelyNet != null && likelyNet > Math.max(10, raw * 0.15);
+  const downsideOk =
+    worstNet == null || worstNet >= -Math.max(15, (likelyNet ?? 0) * 0.25);
+  const verdict = upsideOk && downsideOk ? "grade" : "dont_grade";
 
   const fmt = (n: number | null | undefined) => (n == null ? "?" : `$${n.toFixed(2)}`);
   const reasoning =
     verdict === "grade"
       ? `Estimated grade band ${grade.band.low.toFixed(1)}–${grade.band.high.toFixed(1)} makes ${likely} the likely outcome. ` +
-        `${likely} sells for ${fmt(likelyRow?.value)} vs ${fmt(raw)} raw; after ~$${GRADING_COST} grading cost that nets ${fmt(likelyNet)}, ` +
-        `and even at the low end of the band the sale still covers costs.`
+        `${likely} sells for ${fmt(likelyRow?.value)} vs ${fmt(raw)} raw; after ~$${GRADING_COST} grading cost that nets ${fmt(likelyNet)}.` +
+        (worstNet != null && worstNet < 0
+          ? ` Worst case in the band loses ${fmt(Math.abs(worstNet))} — small next to the upside.`
+          : " Even the low end of the band covers costs.")
       : `Estimated grade band ${grade.band.low.toFixed(1)}–${grade.band.high.toFixed(1)} makes ${likely} the likely outcome, ` +
         `worth ${fmt(likelyRow?.value)} vs ${fmt(raw)} raw. After ~$${GRADING_COST} grading cost the expected net is ${fmt(likelyNet)}` +
         `${worstNet != null && worstNet < 0 ? `, and the low end of the band would lose ${fmt(Math.abs(worstNet))}` : ""}. ` +
-        `The upside doesn't justify the cost and grading risk.`;
+        `The risk/reward doesn't justify grading.`;
 
   return {
     verdict,

@@ -1,4 +1,5 @@
 import type { GradedPrices } from "@grailcard/shared";
+import { similarity } from "./similarity.js";
 
 // PokemonPriceTracker: free tier includes PSA prices (100 credits/day).
 // Set PPT_API_KEY (dashboard -> API) to activate; without a key this module
@@ -9,7 +10,7 @@ function num(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (v && typeof v === "object") {
     const o = v as Record<string, unknown>;
-    for (const k of ["avg", "average", "market", "price", "value"]) {
+    for (const k of ["medianPrice", "averagePrice", "avg", "average", "market", "price", "value"]) {
       if (typeof o[k] === "number") return o[k] as number;
     }
   }
@@ -19,12 +20,14 @@ function num(v: unknown): number | null {
 export async function fetchGradedPrices(
   cardName: string,
   localId?: string | null,
+  setName?: string | null,
 ): Promise<GradedPrices | null> {
   const key = process.env.PPT_API_KEY;
   if (!key) return null;
 
   try {
-    const url = `${PPT_URL}/cards?search=${encodeURIComponent(cardName)}&limit=10&includeEbay=true`;
+    const query = [cardName, setName].filter(Boolean).join(" ");
+    const url = `${PPT_URL}/cards?search=${encodeURIComponent(query)}&limit=10&includeEbay=true`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(8000),
@@ -36,21 +39,35 @@ export async function fetchGradedPrices(
     ) as Record<string, unknown>[];
     if (items.length === 0) return null;
 
-    // prefer the result whose collector number matches what we read off the card
-    const wanted = localId ? String(Number(localId)) : null;
-    const pick =
-      (wanted &&
-        items.find((it) => {
-          const n = it.number ?? it.localId ?? it.cardNumber;
-          return n != null && String(Number(String(n).split("/")[0])) === wanted;
-        })) ||
-      items[0];
+    // the WRONG card's graded prices are worse than none: accept only a
+    // result whose collector number matches, or whose set name clearly does
+    const wanted = localId ? String(Number(String(localId).split("/")[0])) : null;
+    const numberMatches = (it: Record<string, unknown>) => {
+      const n = it.number ?? it.localId ?? it.cardNumber;
+      return (
+        wanted != null &&
+        n != null &&
+        String(Number(String(n).split("/")[0])) === wanted
+      );
+    };
+    const setMatches = (it: Record<string, unknown>) =>
+      setName != null &&
+      typeof it.setName === "string" &&
+      similarity(setName, it.setName) >= 0.6;
 
-    const ebay = (pick.ebay ?? pick.gradedPrices ?? pick.psa ?? null) as Record<
+    const pick =
+      items.find((it) => numberMatches(it) && setMatches(it)) ??
+      items.find(numberMatches) ??
+      items.find(setMatches);
+    if (!pick) return null;
+
+    const ebayRoot = (pick.ebay ?? pick.gradedPrices ?? pick.psa ?? null) as Record<
       string,
-      unknown
+      any
     > | null;
-    if (!ebay) return null;
+    if (!ebayRoot) return null;
+    // PPT nests per-grade sales under ebay.salesByGrade
+    const ebay = (ebayRoot.salesByGrade ?? ebayRoot) as Record<string, unknown>;
 
     const graded: GradedPrices = {
       source: "pokemonpricetracker",

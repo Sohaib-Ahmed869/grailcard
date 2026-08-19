@@ -220,6 +220,7 @@ export class ScansService {
           const graded = await fetchGradedPrices(
             match.identification.name,
             match.identification.localId,
+            match.identification.setName,
           );
           if (graded) {
             scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
