@@ -729,6 +729,21 @@ function ValuationPanel({ scan }: { scan: Scan }) {
           )}
         </>
       )}
+      {scan.slab && (
+        <div className="muted small" style={{ marginTop: 8 }}>
+          <span className="badge info">slab premium</span> The prices above are for{" "}
+          <b>raw, ungraded copies</b>. A {scan.slab.company}-certified{" "}
+          {scan.slab.gradeText} slab sells for a large premium over raw —{" "}
+          {scan.slab.verifyUrl ? (
+            <a href={scan.slab.verifyUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+              see {scan.slab.company}&apos;s own value estimate on the cert page
+            </a>
+          ) : (
+            "check recent graded sales for its real value"
+          )}
+          .
+        </div>
+      )}
       {v.updatedAt && (
         <div className="muted small" style={{ marginTop: 8 }}>
           Prices updated {new Date(v.updatedAt).toLocaleDateString()}

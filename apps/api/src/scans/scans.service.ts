@@ -279,6 +279,9 @@ export class ScansService {
           "Estimates below were made through the case plastic and are NOT authoritative — " +
           "the certified label grade takes precedence.",
       );
+      // our through-plastic condition estimate must not discount a card whose
+      // condition is CERTIFIED on the label — slab value ≠ raw value
+      if (scan.valuation) scan.valuation.conditionAdjusted = null;
       scan.recommendation = {
         verdict: "dont_grade",
         reasoning:
