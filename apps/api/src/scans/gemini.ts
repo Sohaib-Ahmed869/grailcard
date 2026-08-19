@@ -66,7 +66,7 @@ export async function identifyWithGemini(
     const game = typeof parsed.game === "string" ? parsed.game.toLowerCase() : "other";
     return {
       name: parsed.name,
-      game: ["pokemon", "mtg", "yugioh", "onepiece"].includes(game) ? game : "other",
+      game: ["pokemon", "mtg", "yugioh", "onepiece", "sports"].includes(game) ? game : "other",
       setName: typeof parsed.setName === "string" ? parsed.setName : null,
       edition: typeof parsed.edition === "string" ? parsed.edition : null,
       language: typeof parsed.language === "string" ? parsed.language : null,
