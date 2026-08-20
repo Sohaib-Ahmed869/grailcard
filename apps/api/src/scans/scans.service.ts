@@ -281,14 +281,28 @@ export class ScansService {
         scan.identification = match.identification;
         scan.valuation = match.valuation;
         if (match.identification.game === "pokemon") {
-          const graded = await fetchGradedPrices(
+          const ppt = await fetchGradedPrices(
             match.identification.name,
             match.identification.localId,
             match.identification.setName,
           );
-          if (graded) {
+          if (ppt.graded) {
             scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
-            scan.valuation.graded = graded;
+            scan.valuation.graded = ppt.graded;
+          }
+          // vintage sets often have NO price in the free catalogs — PPT's
+          // raw market price fills the gap from the same call
+          if (ppt.rawUsd != null && !scan.valuation?.tcgplayer?.market) {
+            scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
+            scan.valuation.source = "pokemonpricetracker";
+            scan.valuation.tcgplayer = {
+              unit: "USD",
+              variant: "market",
+              low: null,
+              mid: null,
+              high: null,
+              market: ppt.rawUsd,
+            };
           }
         }
       } else if (!scan.identification) {

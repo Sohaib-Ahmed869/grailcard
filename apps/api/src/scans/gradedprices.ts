@@ -17,16 +17,35 @@ function num(v: unknown): number | null {
   return null;
 }
 
-const gradedCache = new Map<string, { at: number; v: GradedPrices | null }>();
+export type PptPrices = { graded: GradedPrices | null; rawUsd: number | null };
+
+const gradedCache = new Map<string, { at: number; v: PptPrices }>();
 const GRADED_CACHE_TTL = 12 * 3600 * 1000;
+
+/** Find a market-ish USD number anywhere in PPT's prices blob (its shape
+ *  varies by card era/variant). */
+function findMarket(prices: unknown, depth = 0): number | null {
+  if (depth > 3 || prices == null) return null;
+  if (typeof prices !== "object") return null;
+  const o = prices as Record<string, unknown>;
+  for (const k of ["market", "marketPrice", "mid", "midPrice"]) {
+    if (typeof o[k] === "number" && (o[k] as number) > 0) return o[k] as number;
+  }
+  for (const v of Object.values(o)) {
+    const found = findMarket(v, depth + 1);
+    if (found != null) return found;
+  }
+  return null;
+}
 
 export async function fetchGradedPrices(
   cardName: string,
   localId?: string | null,
   setName?: string | null,
-): Promise<GradedPrices | null> {
+): Promise<PptPrices> {
+  const empty: PptPrices = { graded: null, rawUsd: null };
   const key = process.env.PPT_API_KEY;
-  if (!key) return null;
+  if (!key) return empty;
 
   const cacheKey = `${cardName}|${localId ?? ""}|${setName ?? ""}`;
   const hit = gradedCache.get(cacheKey);
@@ -41,12 +60,15 @@ export async function fetchGradedPrices(
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return empty; // 429s NOT cached — retried next scan
     const body = (await res.json()) as Record<string, unknown>;
     const items = (
       Array.isArray(body) ? body : (body.data ?? body.cards ?? body.results ?? [])
     ) as Record<string, unknown>[];
-    if (items.length === 0) return null;
+    if (items.length === 0) {
+      gradedCache.set(cacheKey, { at: Date.now(), v: empty });
+      return empty;
+    }
 
     // the WRONG card's graded prices are worse than none: accept only a
     // result whose collector number matches, or whose set name clearly does
@@ -69,15 +91,21 @@ export async function fetchGradedPrices(
       items.find(numberMatches) ??
       items.find(setMatches);
     if (!pick) {
-      gradedCache.set(cacheKey, { at: Date.now(), v: null });
-      return null;
+      gradedCache.set(cacheKey, { at: Date.now(), v: empty });
+      return empty;
     }
+
+    const rawUsd = findMarket(pick.prices);
 
     const ebayRoot = (pick.ebay ?? pick.gradedPrices ?? pick.psa ?? null) as Record<
       string,
       any
     > | null;
-    if (!ebayRoot) return null;
+    if (!ebayRoot) {
+      const v: PptPrices = { graded: null, rawUsd };
+      gradedCache.set(cacheKey, { at: Date.now(), v });
+      return v;
+    }
     // PPT nests per-grade sales under ebay.salesByGrade
     const ebay = (ebayRoot.salesByGrade ?? ebayRoot) as Record<string, unknown>;
 
@@ -88,12 +116,15 @@ export async function fetchGradedPrices(
       psa10: num(ebay.psa10),
       estimated: false,
     };
-    const result =
-      graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded;
+    const result: PptPrices = {
+      graded:
+        graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded,
+      rawUsd,
+    };
     gradedCache.set(cacheKey, { at: Date.now(), v: result });
     return result;
   } catch {
     // do NOT cache failures like 429s — retry on the next scan
-    return null;
+    return empty;
   }
 }
