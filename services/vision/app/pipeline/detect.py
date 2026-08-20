@@ -18,7 +18,8 @@ class Detection:
     quad: np.ndarray  # 4x2 float32 source corners (tl, tr, br, bl)
     card_area_frac: float  # quad area / image area
     source_short_side_px: float  # card's short side length in source pixels
-    bg_color: tuple = (0, 0, 0)  # median BGR of the surface around the card
+    bg_color: tuple | None = (0, 0, 0)  # median BGR around the card; None = no background (full-frame)
+    full_frame: bool = False  # the image itself is the card (cropped scan/render)
 
 
 def _order_corners(pts: np.ndarray) -> np.ndarray:
@@ -81,10 +82,37 @@ def _quad_from_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
     return None
 
 
+def _full_frame_detection(image: np.ndarray) -> Detection:
+    """The image IS the card (a cropped scan or render): no outer boundary
+    exists to detect, so the frame corners are the card corners."""
+    cfg = CONFIG.detect
+    ih, iw = image.shape[:2]
+    warped = cv2.resize(image, (cfg.canonical_w, cfg.canonical_h), interpolation=cv2.INTER_CUBIC)
+    quad = np.array([[0, 0], [iw - 1, 0], [iw - 1, ih - 1], [0, ih - 1]], dtype=np.float32)
+    return Detection(
+        warped=warped,
+        quad=quad,
+        card_area_frac=1.0,
+        source_short_side_px=float(min(iw, ih)),
+        bg_color=None,
+        full_frame=True,
+    )
+
+
+def _image_is_card_shaped(image: np.ndarray) -> bool:
+    ih, iw = image.shape[:2]
+    short, long_ = min(iw, ih), max(iw, ih)
+    return 0.63 <= short / long_ <= 0.85
+
+
 def detect_card(image: np.ndarray) -> Detection | None:
     cfg = CONFIG.detect
     quad = _find_quad(image)
     if quad is None:
+        # no boundary found — if the image itself is card-proportioned AND has
+        # actual content, it IS the card (renders, tightly cropped scans)
+        if _image_is_card_shaped(image) and float(image.std()) > 25.0:
+            return _full_frame_detection(image)
         return None
 
     w = (np.linalg.norm(quad[1] - quad[0]) + np.linalg.norm(quad[2] - quad[3])) / 2
@@ -115,7 +143,15 @@ def detect_card(image: np.ndarray) -> Detection | None:
     cv2.fillPoly(inner, [quad.astype(np.int32)], 255)
     band = cv2.dilate(inner, np.ones((25, 25), np.uint8)) & ~inner
     bg_px = image[band > 0]
-    bg_color = tuple(float(v) for v in np.median(bg_px.reshape(-1, 3), axis=0)) if bg_px.size else (0.0, 0.0, 0.0)
+    bg_color = tuple(float(v) for v in np.median(bg_px.reshape(-1, 3), axis=0)) if bg_px.size else None
+
+    # a BUSY band around a smallish quad in a card-shaped image means we
+    # latched onto an inner design frame of a full-frame card — the "band"
+    # is artwork, not background. The whole image is the card.
+    if bg_px.size:
+        band_std = float(bg_px.reshape(-1, 3).std(axis=0).mean())
+        if area_frac < 0.85 and band_std > 45.0 and _image_is_card_shaped(image):
+            return _full_frame_detection(image)
 
     return Detection(
         warped=warped,

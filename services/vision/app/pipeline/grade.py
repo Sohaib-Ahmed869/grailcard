@@ -155,7 +155,9 @@ def _corner_grade(warped: np.ndarray, bg_color=None) -> tuple:
         dev = np.linalg.norm(stock - med, axis=1)
         uniform = float((dev < 60).mean())
         wear_score = None
-        if uniform >= 0.55:
+        # wear is only judged against clearly uniform stock — busy art rings
+        # produced phantom 1.0s on full-art designs below this bar
+        if uniform >= 0.7:
             wear_frac = float(_wear_mask(stock, med).mean())
             wear_score = max(1.0, 10.0 - wear_frac * 40.0)
 

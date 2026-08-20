@@ -33,11 +33,14 @@ def test_off_center_card_capped_by_centering():
 def test_worn_corner_lowers_corner_grade():
     photo = make_card_photo(lr=50, tb=50)
     det = detect_card(photo)
-    # simulate exposed cardboard at the corner directly on the warped crop
+    bg = (45, 42, 40)  # the synthetic background color
+    # a worn/rounded corner lets the background show deeper than factory
+    # rounding — simulate it and judge with the geometric corner check
     worn = det.warped.copy()
-    cv2.circle(worn, (8, 8), 26, (110, 115, 122), -1)
-    g_clean = compute_grade(det.warped, measure_centering(det.warped))
-    g_worn = compute_grade(worn, measure_centering(worn))
+    cv2.circle(worn, (0, 0), 34, bg, -1)
+    g_clean = compute_grade(det.warped, measure_centering(det.warped), bg_color=bg)
+    g_worn = compute_grade(worn, measure_centering(worn), bg_color=bg)
+    assert g_clean.corners is not None and g_worn.corners is not None
     assert g_worn.corners.value < g_clean.corners.value
 
 
