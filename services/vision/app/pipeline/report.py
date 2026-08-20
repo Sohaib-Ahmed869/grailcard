@@ -43,6 +43,17 @@ def run_pipeline(
     # rejected scan can still tell the user which card we saw
     ocr = read_card_text(det.warped) if (det is not None and read_text) else None
 
+    # slab labels live OUTSIDE the card crop — when the card is small in the
+    # frame (typical of slab photos), scan the FULL image for a label too
+    if (
+        ocr is not None
+        and not ocr.get("slab")
+        and (gate.rejection is not None or gate.quality.low_detail)
+    ):
+        full_reading = read_card_text(image)
+        if full_reading.get("slab"):
+            ocr = {**ocr, "slab": full_reading["slab"]}
+
     if gate.rejection is not None:
         # the photo failed the gate, but if a card was detected we can still
         # offer a PROVISIONAL impression — clearly labeled, never charged,

@@ -33,7 +33,7 @@ export function buildSummary(scan: Scan): string | null {
         `The back measures ${cen.back.lr.toFixed(0)}/${(100 - cen.back.lr).toFixed(0)} and ${cen.back.tb.toFixed(0)}/${(100 - cen.back.tb).toFixed(0)}.`,
       );
     }
-  } else {
+  } else if (cen) {
     parts.push(
       "Centering couldn't be measured — this design has no printed border to measure against, so we don't guess at it.",
     );

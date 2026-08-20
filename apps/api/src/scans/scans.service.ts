@@ -210,6 +210,32 @@ export class ScansService {
         } else if (
           opinion &&
           opinion.game === match.identification.game &&
+          opinion.setName &&
+          match.identification.setName &&
+          similarity(opinion.name, match.identification.name) >= 0.75 &&
+          similarity(opinion.setName, match.identification.setName) < 0.45
+        ) {
+          // same card name but the LLM sees a different SET — same-name cards
+          // across sets differ in value by orders of magnitude (Base Set
+          // Charizard vs Dragon Frontiers Charizard). The catalog row is the
+          // wrong printing: keep the LLM identity, honest and price-less.
+          match = undefined as unknown as typeof match;
+          scan.identification = {
+            cardId: "llm",
+            name: opinion.name,
+            setId: "",
+            setName:
+              [opinion.setName, opinion.edition].filter(Boolean).join(" · ") || "Unknown set",
+            localId: "",
+            rarity: null,
+            imageUrl: null,
+            matchScore: 0.6,
+            ocrName: names[0] ?? "(from image)",
+            game: opinion.game,
+          };
+        } else if (
+          opinion &&
+          opinion.game === match.identification.game &&
           similarity(opinion.name, match.identification.name) < 0.75
         ) {
           // same game but a very different card name: OCR fragments matched
@@ -401,6 +427,20 @@ export class ScansService {
     }
 
     scan.recommendation = buildRecommendation(scan.grade, scan.valuation);
+    // a provisional grade from a gate-rejected photo must never drive a
+    // grading decision — the money math needs a real grade first
+    if (scan.status === "rejected" && scan.recommendation) {
+      scan.recommendation = {
+        verdict: "insufficient_data",
+        reasoning:
+          "This photo failed the quality gate, so the grade above is only a rough impression. " +
+          "Re-shoot the card (closer, flat, even light) before making any grading decision.",
+        gradingCost: scan.recommendation.gradingCost,
+        rawValue: scan.recommendation.rawValue,
+        likelyGrade: null,
+        rows: [],
+      };
+    }
     scan.summary = buildSummary(scan);
 
     db.prepare(
