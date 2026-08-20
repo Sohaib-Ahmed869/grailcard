@@ -372,6 +372,7 @@ export class ScansService {
       const filled = await fetchJustTcgPrice(
         scan.identification.name,
         scan.identification.game,
+        scan.identification.setName,
       );
       if (filled) scan.valuation = { ...filled, graded: scan.valuation?.graded ?? null };
     }

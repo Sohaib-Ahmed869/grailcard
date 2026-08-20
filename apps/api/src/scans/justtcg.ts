@@ -30,30 +30,46 @@ async function search(key: string, q: string, gameSlug?: string): Promise<any[]>
   return (body?.data ?? body?.cards ?? []) as any[];
 }
 
+const priceCache = new Map<string, { at: number; v: Valuation | null }>();
+const CACHE_TTL = 12 * 3600 * 1000;
+
 export async function fetchJustTcgPrice(
   cardName: string,
   game: string,
+  setName?: string | null,
 ): Promise<Valuation | null> {
   const key = process.env.JUSTTCG_API_KEY;
   if (!key) return null;
 
+  const cacheKey = `${game}|${cardName}|${setName ?? ""}`;
+  const hit = priceCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < CACHE_TTL) return hit.v;
+
   try {
     const mapped = GAME_MAP[game];
     let items = mapped ? await search(key, cardName, mapped) : [];
-    // unmapped game (or no hit): cross-game search — but then only a STRONG
-    // name match may be priced, wrong-card prices are worse than none
     if (items.length === 0) {
-      items = (await search(key, cardName)).filter(
-        (it) => similarity(cardName, String(it.name ?? "")) >= 0.8,
-      );
+      items = await search(key, cardName);
     }
+    // on EVERY path, only a STRONG name match may be priced — and when we
+    // know the SET, it must match too. Symbol-stripped names collide
+    // ("Charizard ☆ δ" ≈ "Charizard"), and a $93 Arceus-set Charizard price
+    // was attached to a $10k+ Dragon Frontiers Gold Star.
+    items = items.filter((it) => {
+      if (similarity(cardName, String(it.name ?? "")) < 0.8) return false;
+      if (setName && it.set_name && similarity(setName, String(it.set_name)) < 0.5) return false;
+      return true;
+    });
     const first = items[0];
-    if (!first) return null;
+    if (!first) {
+      priceCache.set(cacheKey, { at: Date.now(), v: null });
+      return null;
+    }
     const variant = (first.variants ?? [])[0] ?? first;
     const price =
       variant.price ?? variant.marketPrice ?? variant.nm ?? first.price ?? null;
     if (price == null) return null;
-    return {
+    const v: Valuation = {
       source: "justtcg",
       updatedAt: null,
       tcgplayer: {
@@ -66,6 +82,8 @@ export async function fetchJustTcgPrice(
       },
       cardmarket: null,
     };
+    priceCache.set(cacheKey, { at: Date.now(), v });
+    return v;
   } catch {
     return null;
   }

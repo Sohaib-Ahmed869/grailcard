@@ -21,12 +21,13 @@ COLLECTOR_RE = re.compile(r"\b(\d{1,3})\s*/\s*(\d{1,3})\b")
 # game-specific set codes printed in Latin script even on Japanese cards
 SET_CODE_RE = re.compile(r"\b((?:OP|ST|EB|PRB)\d{2})\s*[-–]\s*(\d{3})\b", re.IGNORECASE)
 
-_SLAB_COMPANIES = re.compile(r"\b(PSA|BGS|CGC|SGC|TAG|AGS)\b", re.IGNORECASE)
+_SLAB_COMPANIES = re.compile(r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS)\b", re.IGNORECASE)
+_COMPANY_ALIAS = {"BECKETT": "BGS"}
 _SLAB_GRADE = re.compile(
     r"\b(GEM\s*M(?:IN)?T|MINT|NM[-\s]?MT|NM|EX[-\s]?MT|PRISTINE)\b\s*(10|9(?:\.5)?|[1-8](?:\.5)?)?\b",
     re.IGNORECASE,
 )
-_CERT_RE = re.compile(r"\b(\d{7,9})\b")
+_CERT_RE = re.compile(r"\b(\d{7,10})\b")  # PSA 8-9 digits, BGS up to 10
 
 
 def parse_slab(texts: list) -> dict | None:
@@ -56,8 +57,14 @@ def parse_slab(texts: list) -> dict | None:
         )
         if standalone:
             grade_text = f"{grade_text} {standalone}"
+    if company:
+        raw_company = _COMPANY_ALIAS.get(company.group(1).upper(), company.group(1).upper())
+    else:
+        # company logo often doesn't OCR — cert length is a strong tell:
+        # BGS certs run to 10 digits, PSA are 8-9
+        raw_company = "BGS" if cert and len(cert.group(1)) == 10 else "PSA"
     return {
-        "company": company.group(1).upper() if company else "PSA",
+        "company": raw_company,
         "gradeText": grade_text,
         "certNumber": cert.group(1) if cert else None,
     }

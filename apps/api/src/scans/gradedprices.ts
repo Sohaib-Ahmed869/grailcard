@@ -17,6 +17,9 @@ function num(v: unknown): number | null {
   return null;
 }
 
+const gradedCache = new Map<string, { at: number; v: GradedPrices | null }>();
+const GRADED_CACHE_TTL = 12 * 3600 * 1000;
+
 export async function fetchGradedPrices(
   cardName: string,
   localId?: string | null,
@@ -25,8 +28,14 @@ export async function fetchGradedPrices(
   const key = process.env.PPT_API_KEY;
   if (!key) return null;
 
+  const cacheKey = `${cardName}|${localId ?? ""}|${setName ?? ""}`;
+  const hit = gradedCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < GRADED_CACHE_TTL) return hit.v;
+
   try {
-    const query = [cardName, setName].filter(Boolean).join(" ");
+    // strip symbols (star/delta glyphs) that break text search
+    const clean = (s: string) => s.replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
+    const query = [clean(cardName), setName ? clean(setName) : null].filter(Boolean).join(" ");
     const url = `${PPT_URL}/cards?search=${encodeURIComponent(query)}&limit=10&includeEbay=true`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${key}` },
@@ -59,7 +68,10 @@ export async function fetchGradedPrices(
       items.find((it) => numberMatches(it) && setMatches(it)) ??
       items.find(numberMatches) ??
       items.find(setMatches);
-    if (!pick) return null;
+    if (!pick) {
+      gradedCache.set(cacheKey, { at: Date.now(), v: null });
+      return null;
+    }
 
     const ebayRoot = (pick.ebay ?? pick.gradedPrices ?? pick.psa ?? null) as Record<
       string,
@@ -75,10 +87,12 @@ export async function fetchGradedPrices(
       psa9: num(ebay.psa9),
       psa10: num(ebay.psa10),
     };
-    return graded.psa8 == null && graded.psa9 == null && graded.psa10 == null
-      ? null
-      : graded;
+    const result =
+      graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded;
+    gradedCache.set(cacheKey, { at: Date.now(), v: result });
+    return result;
   } catch {
+    // do NOT cache failures like 429s — retry on the next scan
     return null;
   }
 }

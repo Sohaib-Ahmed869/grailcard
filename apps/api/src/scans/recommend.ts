@@ -55,7 +55,9 @@ export function buildRecommendation(
       reasoning:
         raw == null
           ? "We're not recommending grading on this one. We couldn't find market prices for this exact card, and we won't tell you to pay for grading without real sales data to check the math against."
-          : "We're not recommending grading yet. The raw price is known, but graded-sale prices aren't connected (free PSA price data activates with PPT_API_KEY) — and we won't recommend paying for grading off a guess.",
+          : process.env.PPT_API_KEY
+            ? "We're not recommending grading yet. The raw price is known, but no graded sales were found for this exact card and set — check the eBay sold links for graded comps, and we won't recommend paying for grading off a guess."
+            : "We're not recommending grading yet. The raw price is known, but graded-sale prices aren't connected (free PSA price data activates with PPT_API_KEY) — and we won't recommend paying for grading off a guess.",
       gradingCost: GRADING_COST,
       rawValue: raw,
       likelyGrade: likely,
