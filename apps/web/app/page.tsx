@@ -118,101 +118,47 @@ type PulseCard = {
   spark: number[];
 };
 
-function Sparkline({ points, up }: { points: number[]; up: boolean }) {
-  if (points.length < 2) return <div className="spark-empty" />;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const range = max - min || 1;
-  const W = 100;
-  const H = 30;
-  const step = W / (points.length - 1);
-  const coords = points.map((p, i) => `${(i * step).toFixed(1)},${(H - 3 - ((p - min) / range) * (H - 6)).toFixed(1)}`);
-  const color = up ? "var(--green)" : "var(--red)";
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="spark" preserveAspectRatio="none">
-      <polygon
-        points={`0,${H} ${coords.join(" ")} ${W},${H}`}
-        fill={color}
-        opacity={0.12}
-      />
-      <polyline points={coords.join(" ")} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
-      <circle
-        cx={W}
-        cy={Number(coords[coords.length - 1].split(",")[1])}
-        r={2.4}
-        fill={color}
-      />
-    </svg>
-  );
-}
-
-function ChangeChip({ value, label }: { value?: number | null; label: string }) {
-  if (value == null) return null;
-  const up = value >= 0;
-  return (
-    <span className={`chip ${up ? "up" : "down"}`}>
-      {up ? "▲" : "▼"} {Math.abs(value).toFixed(1)}% <em>{label}</em>
-    </span>
-  );
-}
-
-function PulseCards({ cards }: { cards: PulseCard[] }) {
+function TickerItems({ cards }: { cards: PulseCard[] }) {
   return (
     <>
       {cards.map((c, i) => {
-        const up = (c.change7d ?? c.change24h ?? 0) >= 0;
+        const chg = c.change7d ?? c.change24h;
+        const up = (chg ?? 0) >= 0;
         return (
-          <div className="pulse-card" key={c.label + c.setName + i}>
-            <div className="pulse-row">
-              <div>
-                <div className="pulse-name">{c.label}</div>
-                <div className="muted small">{c.setName}</div>
-              </div>
-              <div className="pulse-price">
-                {c.price != null ? `$${c.price.toFixed(2)}` : "—"}
-              </div>
-            </div>
-            <Sparkline points={c.spark} up={up} />
-            <div className="pulse-chips">
-              <ChangeChip value={c.change24h} label="24h" />
-              <ChangeChip value={c.change7d} label="7d" />
-            </div>
-          </div>
+          <span className="htick" key={c.label + i}>
+            <b>{c.label}</b>
+            {c.price != null && <span className="htick-price">${c.price.toFixed(2)}</span>}
+            {chg != null && (
+              <span className={up ? "up-text" : "down-text"}>
+                {up ? "▲" : "▼"}{Math.abs(chg).toFixed(1)}%
+              </span>
+            )}
+          </span>
         );
       })}
     </>
   );
 }
 
-function MarketPulse() {
-  const [cards, setCards] = useState<PulseCard[] | null>(null);
+function MarketTicker() {
+  const [cards, setCards] = useState<PulseCard[]>([]);
   useEffect(() => {
     fetch(`${API}/market/pulse`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setCards)
-      .catch(() => setCards([]));
+      .catch(() => {});
   }, []);
-
+  if (cards.length === 0) return <div className="hticker" />;
   return (
-    <aside className="rail pulse">
-      <div className="pulse-head">
-        <span className="pulse-dot" />
-        <div>
-          <div className="pulse-title">Market Pulse</div>
-          <div className="muted small">live rates · drifting, hover to hold</div>
+    <div className="hticker">
+      <span className="label-mono accent-text">· MARKET</span>
+      <div className="hticker-clip">
+        <div className="hticker-track">
+          <TickerItems cards={cards} />
+          <TickerItems cards={cards} />
         </div>
       </div>
-      <div className="ticker">
-        {cards === null && [1, 2, 3, 4].map((i) => <div className="pulse-card shimmer" key={i} />)}
-        {cards && cards.length > 0 && (
-          <div className="ticker-track">
-            <PulseCards cards={cards} />
-            <PulseCards cards={cards} />
-          </div>
-        )}
-      </div>
-      <div className="muted small rail-source">JustTCG market data · refreshes twice daily</div>
-    </aside>
+    </div>
   );
 }
 
@@ -220,57 +166,107 @@ type NewsItem = { title: string; source: string; link: string; publishedAt: stri
 
 function timeAgo(iso: string): string {
   const mins = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return `${mins}m`;
   const hrs = Math.round(mins / 60);
-  if (hrs < 48) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 48) return `${hrs}h`;
+  return `${Math.round(hrs / 24)}d`;
 }
 
-function NewsItems({ items }: { items: NewsItem[] }) {
+function NewsLineItems({ items }: { items: NewsItem[] }) {
   return (
     <>
       {items.map((n, i) => (
-        <a className="news-item" href={n.link} target="_blank" rel="noreferrer" key={n.link + i}>
-          <div className="news-meta">
-            <span className="news-source">{n.source}</span>
-            <span className="muted small">{timeAgo(n.publishedAt)}</span>
-          </div>
-          <div className="news-title">{n.title}</div>
+        <a className="newsline-item" href={n.link} target="_blank" rel="noreferrer" key={n.link + i}>
+          <span className="news-source">{n.source}</span>
+          {n.title.replace(/ - [^-]+$/, "")}
+          <span className="muted small">{timeAgo(n.publishedAt)}</span>
         </a>
       ))}
     </>
   );
 }
 
-function NewsFeed() {
-  const [items, setItems] = useState<NewsItem[] | null>(null);
+function NewsLine() {
+  const [items, setItems] = useState<NewsItem[]>([]);
   useEffect(() => {
     fetch(`${API}/market/news`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setItems)
-      .catch(() => setItems([]));
+      .catch(() => {});
   }, []);
-
+  if (items.length === 0) return null;
   return (
-    <aside className="rail news">
-      <div className="pulse-head">
-        <span className="pulse-dot violet" />
-        <div>
-          <div className="pulse-title">Hobby Wire</div>
-          <div className="muted small">card world news · hover to hold</div>
+    <div className="newsline">
+      <span className="label-mono violet-text">HOBBY WIRE</span>
+      <div className="newsline-clip">
+        <div className="newsline-track">
+          <NewsLineItems items={items} />
+          <NewsLineItems items={items} />
         </div>
       </div>
-      <div className="ticker slow">
-        {items === null && [1, 2, 3, 4, 5].map((i) => <div className="news-item shimmer" key={i} />)}
-        {items && items.length > 0 && (
-          <div className="ticker-track">
-            <NewsItems items={items} />
-            <NewsItems items={items} />
-          </div>
-        )}
+      <span className="label-mono muted">{items.length} stories</span>
+    </div>
+  );
+}
+
+function BandTrack({ overall, band }: { overall: number; band: { low: number; high: number } }) {
+  const pos = (v: number) => `${((v - 1) / 9) * 100}%`;
+  return (
+    <div className="band-track-wrap">
+      <div className="band-track">
+        <div
+          className="band-track-band"
+          style={{ left: pos(band.low), width: `calc(${pos(band.high)} - ${pos(band.low)})` }}
+        />
+        <div className="band-track-dot" style={{ left: pos(overall) }} />
       </div>
-      <div className="muted small rail-source">Google News · refreshes every 45 min</div>
-    </aside>
+      <div className="band-track-labels label-mono">
+        <span>1</span>
+        <span>5</span>
+        <span>10</span>
+      </div>
+    </div>
+  );
+}
+
+function CritCard({
+  label,
+  sub,
+  note,
+}: {
+  label: string;
+  sub?: { value: number; confidence: number } | null;
+  note?: string;
+}) {
+  return (
+    <div className="crit-card">
+      <div className="crit-head">
+        <span className="crit-label">{label}</span>
+        <span
+          className="crit-value"
+          style={{ color: sub ? gradeColor(sub.value) : "var(--muted)" }}
+        >
+          {sub ? sub.value.toFixed(1) : "not measurable"}
+        </span>
+      </div>
+      {sub ? (
+        <>
+          <div className="crit-bar">
+            <div
+              style={{
+                width: `${(sub.value / 10) * 100}%`,
+                background: gradeColor(sub.value),
+              }}
+            />
+          </div>
+          <div className="muted small">
+            {(sub.confidence * 100).toFixed(0)}% confidence{note ? ` · ${note}` : ""}
+          </div>
+        </>
+      ) : (
+        <div className="muted small">{note ?? "—"}</div>
+      )}
+    </div>
   );
 }
 
@@ -333,8 +329,8 @@ function CaptureSlot({
 
   return (
     <div className="slot">
-      <div className="slot-label">
-        {label} {required ? "" : "(optional)"}
+      <div className="slot-label label-mono">
+        {label} · {required ? "required" : "optional"}
       </div>
       <div
         className={`scan-frame${scanning ? " scanning" : ""}`}
@@ -401,7 +397,7 @@ function Viewer({ scan }: { scan: Scan }) {
   const key = `${scan.id}/${side}_${mode === "overlay" ? "overlay" : "warped"}.png`;
 
   return (
-    <div className="viewer">
+    <div className="viewer" id="detection">
       <div className="viewer-tabs">
         <button className={mode === "overlay" ? "active" : ""} onClick={() => setMode("overlay")}>
           Detection lines
@@ -446,215 +442,63 @@ function gradeColor(v: number) {
   return "#e05252";
 }
 
-// semicircular gauge geometry: fraction 0..1 -> point on the arc
-function gaugePoint(cx: number, cy: number, r: number, frac: number) {
-  const a = Math.PI * (1 - frac);
-  return [cx + r * Math.cos(a), cy - r * Math.sin(a)] as const;
-}
-
-function gaugeArc(cx: number, cy: number, r: number, f0: number, f1: number) {
-  const [x0, y0] = gaugePoint(cx, cy, r, f0);
-  const [x1, y1] = gaugePoint(cx, cy, r, f1);
-  // a semicircular gauge arc never exceeds 180°, so large-arc is always 0
-  return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`;
-}
-
-function GradeGauge({
-  overall,
-  band,
-}: {
-  overall: number;
-  band: { low: number; high: number };
-}) {
-  // geometry padded so nothing (labels, rounded caps, ticks) clips the viewBox
-  const cx = 120;
-  const cy = 116;
-  const r = 78;
-  const frac = (v: number) => Math.min(1, Math.max(0, (v - 1) / 9));
-  const ticks = [];
-  for (let v = 1; v <= 10; v++) {
-    const major = v === 1 || v === 5 || v === 10;
-    const [x0, y0] = gaugePoint(cx, cy, r + 10, frac(v));
-    const [x1, y1] = gaugePoint(cx, cy, r + (major ? 18 : 14), frac(v));
-    const [lx, ly] = gaugePoint(cx, cy, r + 29, frac(v));
-    ticks.push(
-      <g key={v}>
-        <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="var(--track-strong)" strokeWidth={major ? 2 : 1.5} />
-        {major && (
-          <text x={lx} y={ly + 4} textAnchor="middle" fontSize={11} fill="var(--muted)">
-            {v}
-          </text>
-        )}
-      </g>,
-    );
-  }
-  return (
-    <svg viewBox="0 0 240 140" className="gauge">
-      <path
-        d={gaugeArc(cx, cy, r, 0, 1)}
-        stroke="var(--track)"
-        strokeWidth={13}
-        fill="none"
-        strokeLinecap="round"
-      />
-      <path
-        d={gaugeArc(cx, cy, r, frac(band.low), frac(band.high))}
-        stroke={gradeColor(overall)}
-        strokeOpacity={0.28}
-        strokeWidth={13}
-        fill="none"
-        strokeLinecap="butt"
-      />
-      <path
-        d={gaugeArc(cx, cy, r, 0, frac(overall))}
-        stroke={gradeColor(overall)}
-        strokeWidth={6}
-        fill="none"
-        strokeLinecap="round"
-      />
-      {ticks}
-      <circle
-        cx={gaugePoint(cx, cy, r, frac(overall))[0]}
-        cy={gaugePoint(cx, cy, r, frac(overall))[1]}
-        r={6.5}
-        fill={gradeColor(overall)}
-        stroke="var(--bg)"
-        strokeWidth={2.5}
-      />
-      <text x={cx} y={cy - 12} textAnchor="middle" fontSize={34} fontWeight={800} fill="var(--text)">
-        {overall.toFixed(1)}
-      </text>
-      <text x={cx} y={cy + 8} textAnchor="middle" fontSize={10} letterSpacing={2} fill="var(--muted)">
-        GC ESTIMATE
-      </text>
-    </svg>
-  );
-}
-
-const RADAR_AXES = [
-  ["Centering", "centering"],
-  ["Corners", "corners"],
-  ["Edges", "edges"],
-  ["Surface", "surface"],
-] as const;
-
-function RadarChart({ g }: { g: NonNullable<Scan["grade"]> }) {
-  const cx = 110;
-  const cy = 100;
-  const R = 66;
-  const angle = (i: number) => (Math.PI / 2) * i - Math.PI / 2; // top, right, bottom, left
-  const pt = (i: number, radius: number) =>
-    [cx + radius * Math.cos(angle(i)), cy + radius * Math.sin(angle(i))] as const;
-  const rings = [0.25, 0.5, 0.75, 1].map((f) => (
-    <polygon
-      key={f}
-      points={RADAR_AXES.map((_, i) => pt(i, R * f).join(",")).join(" ")}
-      fill="none"
-      stroke="var(--track)"
-      strokeWidth={f === 1 ? 1.5 : 1}
-    />
-  ));
-  const subs = RADAR_AXES.map(([, key]) => g.subgrades[key]);
-  const shape = RADAR_AXES.map((_, i) =>
-    pt(i, ((subs[i]?.value ?? 0) / 10) * R).join(","),
-  ).join(" ");
-  return (
-    <svg viewBox="0 0 220 200" className="radar">
-      {rings}
-      {RADAR_AXES.map((_, i) => {
-        const [x, y] = pt(i, R);
-        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--track)" strokeWidth={1} />;
-      })}
-      <polygon points={shape} fill="var(--radar-fill)" stroke="var(--accent)" strokeWidth={2} />
-      {RADAR_AXES.map(([label], i) => {
-        const sub = subs[i];
-        const [vx, vy] = pt(i, ((sub?.value ?? 0) / 10) * R);
-        const [lx, ly] = pt(i, R + 22);
-        return (
-          <g key={label}>
-            {sub && <circle cx={vx} cy={vy} r={4} fill={gradeColor(sub.value)} stroke="var(--bg)" strokeWidth={1.5} />}
-            <text x={lx} y={ly} textAnchor="middle" fontSize={11} fill="var(--muted)">
-              {label}
-            </text>
-            <text x={lx} y={ly + 13} textAnchor="middle" fontSize={12} fontWeight={700}
-              fill={sub ? gradeColor(sub.value) : "var(--muted)"}>
-              {sub ? sub.value.toFixed(1) : "n/a"}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-function ScaleBar({
-  label,
-  sub,
-}: {
-  label: string;
-  sub?: { value: number; confidence: number } | null;
-}) {
-  return (
-    <div className="scalebar-row">
-      <div className="scalebar-label">
-        <span>{label}</span>
-        <span style={{ color: sub ? gradeColor(sub.value) : "var(--muted)", fontWeight: 700 }}>
-          {sub ? sub.value.toFixed(1) : "n/a"}
-        </span>
-      </div>
-      <div className="scalebar-track">
-        {sub && (
-          <div
-            className="scalebar-fill"
-            style={{
-              width: `${((sub.value - 1) / 9) * 100}%`,
-              background: gradeColor(sub.value),
-              opacity: 0.45 + sub.confidence * 0.55,
-            }}
-          />
-        )}
-      </div>
-      <div className="muted small">
-        {sub ? `${(sub.confidence * 100).toFixed(0)}% confidence` : "not assessable on this card"}
-      </div>
-    </div>
-  );
-}
 
 function GradePanel({ scan }: { scan: Scan }) {
   const g = scan.grade;
   if (!g) return null;
+  const critNote = (key: "centering" | "corners" | "edges") => {
+    if (g.subgrades[key]) return undefined;
+    return key === "centering"
+      ? "No printed border on this design — we don't guess."
+      : "Art runs to the edge — no border stock to judge.";
+  };
   return (
-    <div className="panel">
+    <div className="panel verdict">
       {scan.status === "rejected" && (
-        <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: 12 }}>
           <span className="badge warn">provisional — photo failed the quality gate</span>
           <span className="muted small"> a rough impression only; re-shoot for a real grade</span>
         </div>
       )}
-      <div className="grade-viz">
+      <div className="verdict-head">
         <div>
-          <GradeGauge overall={g.overall} band={g.band} />
-          <div className="band-note">
-            band <b>{g.band.low.toFixed(1)} – {g.band.high.toFixed(1)}</b> — the band is the
-            honest claim; the number is its midpoint
+          <div className="label-mono accent-text">GC ESTIMATE</div>
+          <div className="gc-num" style={{ color: gradeColor(g.overall) }}>
+            {g.overall.toFixed(1)}
           </div>
+        </div>
+        <div className="verdict-side">
+          <p className="muted" style={{ margin: 0 }}>
+            Honest band <b style={{ color: "var(--text)" }}>{g.band.low.toFixed(1)} – {g.band.high.toFixed(1)}</b>.
+            The band is the claim; the number is its midpoint.
+          </p>
+          <BandTrack overall={g.overall} band={g.band} />
           {scan.authenticity?.digitalLikely && (
-            <div style={{ marginTop: 8, textAlign: "center" }}>
-              <span className="badge warn">possible digital image</span>
-            </div>
+            <span className="badge warn">possible digital image</span>
           )}
         </div>
-        <RadarChart g={g} />
-        <div className="scalebars">
-          <ScaleBar label="Centering" sub={g.subgrades.centering} />
-          <ScaleBar label="Corners" sub={g.subgrades.corners} />
-          <ScaleBar label="Edges" sub={g.subgrades.edges} />
-          <ScaleBar label="Surface" sub={g.subgrades.surface} />
-        </div>
       </div>
+      <div className="crit-grid">
+        <CritCard
+          label="Surface"
+          sub={g.subgrades.surface}
+          note={
+            g.findings?.scratchesDetected
+              ? `${g.findings.clusterCount} marks flagged`
+              : "no marks above threshold"
+          }
+        />
+        <CritCard label="Corners" sub={g.subgrades.corners} note={critNote("corners")} />
+        <CritCard label="Centering" sub={g.subgrades.centering} note={critNote("centering")} />
+        <CritCard label="Edges" sub={g.subgrades.edges} note={critNote("edges")} />
+      </div>
+      {scan.status !== "rejected" && (
+        <a className="see-detection" href="#detection">
+          See detection view
+        </a>
+      )}
       {scan.summary && (
-        <p style={{ margin: "10px 0", lineHeight: 1.6 }}>{scan.summary}</p>
+        <p style={{ margin: "14px 0 8px", lineHeight: 1.65 }}>{scan.summary}</p>
       )}
       <FindingsLine scan={scan} />
       {g.notes.map((n) => (
@@ -1146,17 +990,17 @@ export default function Home() {
   }
 
   return (
-    <main className="shell">
-      <NewsFeed />
-      <div className="content">
+    <main>
       <div className="topbar">
-        <div>
-          <h1>Grailcard</h1>
-          <p className="tagline">
-            Centering, measured — not guessed. Bad photos get rejected, not graded.
-          </p>
-        </div>
+        <span className="wordmark">GRAILCARD</span>
+        <MarketTicker />
         <ThemeToggle />
+      </div>
+      <div className="capture-head">
+        <h1>Place the card. We do the measuring.</h1>
+        <p className="tagline">
+          Centering, measured — not guessed. Bad photos get rejected, not graded.
+        </p>
       </div>
 
       <div className="slots">
@@ -1177,8 +1021,7 @@ export default function Home() {
       )}
 
       {scan && <Result scan={scan} />}
-      </div>
-      <MarketPulse />
+      <NewsLine />
     </main>
   );
 }
