@@ -50,14 +50,11 @@ export function buildRecommendation(
   }));
 
   if (!graded || raw == null) {
+    // no fabricated maybes: a determinate answer with honest reasoning
     return {
-      verdict: "insufficient_data",
+      verdict: "dont_grade",
       reasoning:
-        raw == null
-          ? "We're not recommending grading on this one. We couldn't find market prices for this exact card, and we won't tell you to pay for grading without real sales data to check the math against."
-          : process.env.PPT_API_KEY
-            ? "We're not recommending grading yet. The raw price is known, but no graded sales were found for this exact card and set — check the eBay sold links for graded comps, and we won't recommend paying for grading off a guess."
-            : "We're not recommending grading yet. The raw price is known, but graded-sale prices aren't connected (free PSA price data activates with PPT_API_KEY) — and we won't recommend paying for grading off a guess.",
+        "Don't grade this one on today's data. No market prices exist for this exact card in any database we reach — the eBay sold links below are the best pricing that exists for it. If real graded sales appear there and clearly beat the raw price plus fees, revisit.",
       gradingCost: GRADING_COST,
       rawValue: raw,
       likelyGrade: likely,
@@ -79,8 +76,11 @@ export function buildRecommendation(
   const verdict = upsideOk && downsideOk ? "grade" : "dont_grade";
 
   const fmt = (n: number | null | undefined) => (n == null ? "?" : `$${n.toFixed(2)}`);
+  const estNote = graded.estimated
+    ? " Note: graded values here are ESTIMATES (no verified sales found) — confirm with the eBay sold links before paying for grading."
+    : "";
   const reasoning =
-    verdict === "grade"
+    (verdict === "grade"
       ? `Estimated grade band ${grade.band.low.toFixed(1)}–${grade.band.high.toFixed(1)} makes ${likely} the likely outcome. ` +
         `${likely} sells for ${fmt(likelyRow?.value)} vs ${fmt(raw)} raw; after ~$${GRADING_COST} grading cost that nets ${fmt(likelyNet)}.` +
         (worstNet != null && worstNet < 0
@@ -89,7 +89,7 @@ export function buildRecommendation(
       : `Estimated grade band ${grade.band.low.toFixed(1)}–${grade.band.high.toFixed(1)} makes ${likely} the likely outcome, ` +
         `worth ${fmt(likelyRow?.value)} vs ${fmt(raw)} raw. After ~$${GRADING_COST} grading cost the expected net is ${fmt(likelyNet)}` +
         `${worstNet != null && worstNet < 0 ? `, and the low end of the band would lose ${fmt(Math.abs(worstNet))}` : ""}. ` +
-        `The risk/reward doesn't justify grading.`;
+        `The risk/reward doesn't justify grading.`) + estNote;
 
   return {
     verdict,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Scan, VisionAnalyzeResponse } from "@grailcard/shared";
 import { db } from "../db.js";
 import { identifyApiTcg } from "./apitcg.js";
+import { estimateGradedFromRaw, fetchCardGraderMarket } from "./cardgrader.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices } from "./gradedprices.js";
@@ -377,6 +378,25 @@ export class ScansService {
       if (filled) scan.valuation = { ...filled, graded: scan.valuation?.graded ?? null };
     }
 
+    // graded-price fallback chain: PPT sold data (above) -> CardGrader
+    // market module (their eBay comps; costs a credit) -> multiplier
+    // estimate from raw (always available, clearly labeled estimated).
+    // Every card gets SOME graded picture, with its provenance stated.
+    if (scan.identification && !scan.valuation?.graded) {
+      const backup = await fetchCardGraderMarket(
+        front.buffer.toString("base64"),
+        `gc-market-${id}`,
+      );
+      if (backup) {
+        scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
+        scan.valuation.graded = backup;
+      }
+    }
+    const rawForEst = scan.valuation?.tcgplayer?.market ?? scan.valuation?.cardmarket?.trend;
+    if (scan.valuation && !scan.valuation.graded && rawForEst != null && rawForEst > 0) {
+      scan.valuation.graded = estimateGradedFromRaw(rawForEst);
+    }
+
     // market prices are near-mint; adjust to THIS copy's estimated condition
     const nmPrice = scan.valuation?.tcgplayer?.market ?? scan.valuation?.cardmarket?.trend;
     if (scan.valuation && scan.grade && nmPrice != null) {
@@ -432,10 +452,10 @@ export class ScansService {
     // grading decision — the money math needs a real grade first
     if (scan.status === "rejected" && scan.recommendation) {
       scan.recommendation = {
-        verdict: "insufficient_data",
+        verdict: "dont_grade",
         reasoning:
-          "This photo failed the quality gate, so the grade above is only a rough impression. " +
-          "Re-shoot the card (closer, flat, even light) before making any grading decision.",
+          "Don't act on this scan: the photo failed the quality gate, so the grade above is only a rough impression. " +
+          "Re-shoot the card (closer, flat, even light) and decide from that scan.",
         gradingCost: scan.recommendation.gradingCost,
         rawValue: scan.recommendation.rawValue,
         likelyGrade: null,

@@ -87,6 +87,7 @@ type Scan = {
       psa8?: number | null;
       psa9?: number | null;
       psa10?: number | null;
+      estimated?: boolean;
     } | null;
     tcgplayer?: {
       unit: string;
@@ -298,6 +299,32 @@ const SCAN_STEPS = [
   "Matching catalog…",
   "Fetching market prices…",
 ];
+
+let fxPromise: Promise<number> | null = null;
+function useAud(): number | null {
+  const [rate, setRate] = useState<number | null>(null);
+  useEffect(() => {
+    fxPromise ??= fetch(`${API}/market/fx`)
+      .then((r) => (r.ok ? r.json() : { usdToAud: null }))
+      .then((b) => b.usdToAud ?? 1.5)
+      .catch(() => 1.5);
+    fxPromise.then(setRate);
+  }, []);
+  return rate;
+}
+
+function Money({ v, aud, unit = "USD" }: { v?: number | null; aud: number | null; unit?: string }) {
+  if (v == null) return <>—</>;
+  const main = unit === "USD" ? `$${v.toFixed(2)}` : `€${v.toFixed(2)}`;
+  return (
+    <>
+      {main}
+      {unit === "USD" && aud != null && (
+        <span className="muted small"> · A${(v * aud).toFixed(v * aud >= 100 ? 0 : 2)}</span>
+      )}
+    </>
+  );
+}
 
 function money(v: number | null | undefined, unit: string) {
   if (v == null) return "—";
@@ -630,6 +657,7 @@ function IdentityPanel({ scan }: { scan: Scan }) {
 
 function RecommendationPanel({ scan }: { scan: Scan }) {
   const r = scan.recommendation;
+  const aud = useAud();
   if (!r) return null;
   const verdictBadge =
     r.verdict === "grade" ? (
@@ -669,7 +697,7 @@ function RecommendationPanel({ scan }: { scan: Scan }) {
           {r.rows.map((row) => (
             <tr key={row.grade} className={row.inBand ? "in-band" : ""}>
               <td>{row.grade}</td>
-              <td>{row.value != null ? `$${row.value.toFixed(2)}` : "—"}</td>
+              <td><Money v={row.value} aud={aud} /></td>
               <td
                 style={{
                   color:
@@ -758,17 +786,18 @@ function EbayComps({ scan }: { scan: Scan }) {
 
 function ValuationPanel({ scan }: { scan: Scan }) {
   const v = scan.valuation;
+  const aud = useAud();
   if (!v) return null;
   return (
     <div className="panel">
       <div className="muted" style={{ marginBottom: 6 }}>
-        Market value <span className="small">(raw / ungraded)</span>
+        Market value <span className="small">(raw / ungraded · USD, AUD approx)</span>
       </div>
       {v.tcgplayer && (
         <>
           <div className="price-row">
             <span>TCGplayer market ({v.tcgplayer.variant})</span>
-            <span className="v">{money(v.tcgplayer.market, v.tcgplayer.unit)}</span>
+            <span className="v"><Money v={v.tcgplayer.market} aud={aud} /></span>
           </div>
           <div className="price-row">
             <span>TCGplayer low – high</span>
@@ -797,21 +826,31 @@ function ValuationPanel({ scan }: { scan: Scan }) {
             <span className="muted small">(× {v.conditionAdjusted.multiplier} of NM)</span>
           </span>
           <span className="v" style={{ color: "var(--accent)" }}>
-            ${v.conditionAdjusted.value.toFixed(2)}
+            <Money v={v.conditionAdjusted.value} aud={aud} />
           </span>
         </div>
       )}
       {v.graded && (
         <>
           <div className="muted" style={{ margin: "12px 0 6px" }}>
-            Graded value <span className="small">(eBay sales averages)</span>
+            Graded value{" "}
+            <span className="small">
+              {v.graded.estimated
+                ? v.graded.source === "cardgrader"
+                  ? "(third-party estimate — CardGrader comps)"
+                  : "(ESTIMATED from raw price multiples — no verified sales found; confirm via eBay links)"
+                : "(eBay sales medians)"}
+            </span>
           </div>
           {([["PSA 10", v.graded.psa10], ["PSA 9", v.graded.psa9], ["PSA 8", v.graded.psa8]] as const).map(
             ([label, price]) =>
               price != null && (
                 <div className="price-row" key={label}>
-                  <span>{label}</span>
-                  <span className="v">${price.toFixed(2)}</span>
+                  <span>
+                    {label}
+                    {v.graded!.estimated && <span className="muted small"> (est.)</span>}
+                  </span>
+                  <span className="v"><Money v={price} aud={aud} /></span>
                 </div>
               ),
           )}

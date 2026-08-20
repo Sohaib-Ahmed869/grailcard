@@ -108,10 +108,12 @@ export const Identification = z.object({
 export type Identification = z.infer<typeof Identification>;
 
 export const GradedPrices = z.object({
-  source: z.string(), // "pokemonpricetracker" (eBay sales averages)
+  source: z.string(), // pokemonpricetracker | cardgrader | estimate
   psa8: z.number().nullish(),
   psa9: z.number().nullish(),
   psa10: z.number().nullish(),
+  // true when these are model/multiplier estimates, NOT verified sales
+  estimated: z.boolean().default(false),
 });
 export type GradedPrices = z.infer<typeof GradedPrices>;
 

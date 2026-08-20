@@ -86,6 +86,7 @@ export async function fetchGradedPrices(
       psa8: num(ebay.psa8),
       psa9: num(ebay.psa9),
       psa10: num(ebay.psa10),
+      estimated: false,
     };
     const result =
       graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded;
