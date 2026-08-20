@@ -106,6 +106,112 @@ type Scan = {
   } | null;
 };
 
+type PulseCard = {
+  label: string;
+  setName: string;
+  game: string;
+  price?: number | null;
+  change24h?: number | null;
+  change7d?: number | null;
+  low7?: number | null;
+  high7?: number | null;
+  spark: number[];
+};
+
+function Sparkline({ points, up }: { points: number[]; up: boolean }) {
+  if (points.length < 2) return <div className="spark-empty" />;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const W = 100;
+  const H = 30;
+  const step = W / (points.length - 1);
+  const coords = points.map((p, i) => `${(i * step).toFixed(1)},${(H - 3 - ((p - min) / range) * (H - 6)).toFixed(1)}`);
+  const color = up ? "var(--green)" : "var(--red)";
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="spark" preserveAspectRatio="none">
+      <polygon
+        points={`0,${H} ${coords.join(" ")} ${W},${H}`}
+        fill={color}
+        opacity={0.12}
+      />
+      <polyline points={coords.join(" ")} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
+      <circle
+        cx={W}
+        cy={Number(coords[coords.length - 1].split(",")[1])}
+        r={2.4}
+        fill={color}
+      />
+    </svg>
+  );
+}
+
+function ChangeChip({ value, label }: { value?: number | null; label: string }) {
+  if (value == null) return null;
+  const up = value >= 0;
+  return (
+    <span className={`chip ${up ? "up" : "down"}`}>
+      {up ? "▲" : "▼"} {Math.abs(value).toFixed(1)}% <em>{label}</em>
+    </span>
+  );
+}
+
+function MarketPulse() {
+  const [cards, setCards] = useState<PulseCard[] | null>(null);
+  useEffect(() => {
+    fetch(`${API}/market/pulse`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setCards)
+      .catch(() => setCards([]));
+  }, []);
+
+  return (
+    <aside className="pulse">
+      <div className="pulse-head">
+        <span className="pulse-dot" />
+        <div>
+          <div className="pulse-title">Market Pulse</div>
+          <div className="muted small">live rates across the hobby</div>
+        </div>
+      </div>
+      {cards === null &&
+        [1, 2, 3, 4, 5].map((i) => <div className="pulse-card shimmer" key={i} />)}
+      {cards?.map((c) => {
+        const up = (c.change7d ?? c.change24h ?? 0) >= 0;
+        return (
+          <div className="pulse-card" key={c.label + c.setName}>
+            <div className="pulse-row">
+              <div>
+                <div className="pulse-name">{c.label}</div>
+                <div className="muted small">{c.setName}</div>
+              </div>
+              <div className="pulse-price">
+                {c.price != null ? `$${c.price.toFixed(2)}` : "—"}
+              </div>
+            </div>
+            <Sparkline points={c.spark} up={up} />
+            <div className="pulse-chips">
+              <ChangeChip value={c.change24h} label="24h" />
+              <ChangeChip value={c.change7d} label="7d" />
+              {c.low7 != null && c.high7 != null && (
+                <span className="muted small">
+                  7d ${c.low7.toFixed(2)}–${c.high7.toFixed(2)}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {cards && cards.length === 0 && (
+        <div className="muted small">Market data warming up — check back shortly.</div>
+      )}
+      <div className="muted small" style={{ marginTop: 6 }}>
+        Source: JustTCG market data · refreshes twice daily
+      </div>
+    </aside>
+  );
+}
+
 function ThemeToggle() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   useEffect(() => {
@@ -978,7 +1084,8 @@ export default function Home() {
   }
 
   return (
-    <main>
+    <main className="shell">
+      <div className="content">
       <div className="topbar">
         <div>
           <h1>Grailcard</h1>
@@ -1007,6 +1114,8 @@ export default function Home() {
       )}
 
       {scan && <Result scan={scan} />}
+      </div>
+      <MarketPulse />
     </main>
   );
 }
