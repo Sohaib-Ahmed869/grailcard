@@ -65,14 +65,18 @@ export async function fetchCardGraderMarket(
 }
 
 /** Always-available floor: multiplier estimates from the raw NM price.
- *  Clearly labeled — these are heuristics, not sales. */
+ *  Clearly labeled — these are heuristics, not sales. Grade premiums
+ *  COMPRESS as raw value rises (a $5 card can 6x in a PSA 10 slab; a
+ *  $2,000 card rarely does 2.5x), so the multipliers are value-banded. */
 export function estimateGradedFromRaw(raw: number): GradedPrices {
+  const [m8, m9, m10] =
+    raw >= 500 ? [1.0, 1.3, 2.5] : raw >= 50 ? [1.1, 1.7, 4.0] : [1.2, 2.0, 6.0];
   const r = (v: number) => Math.round(v * 100) / 100;
   return {
     source: "estimate",
-    psa8: r(raw * 1.1),
-    psa9: r(raw * 1.7),
-    psa10: r(raw * 4.0),
+    psa8: r(raw * m8),
+    psa9: r(raw * m9),
+    psa10: r(raw * m10),
     estimated: true,
   };
 }
