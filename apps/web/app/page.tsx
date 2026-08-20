@@ -859,10 +859,22 @@ function Result({ scan }: { scan: Scan }) {
       <RecommendationPanel scan={scan} />
 
       {scan.status === "rejected" && scan.rejection ? (
-        <div className="panel">
-          <span className="badge warn">not graded — no charge</span>
-          <h3>{scan.rejection.userMessage}</h3>
-          <p className="muted">{scan.rejection.retryHint}</p>
+        <div className="result-grid">
+          {scan.grade && <Viewer scan={scan} />}
+          <div>
+            <div className="panel">
+              <span className="badge warn">not graded — no charge</span>
+              <h3>{scan.rejection.userMessage}</h3>
+              <p className="muted">{scan.rejection.retryHint}</p>
+              {scan.grade && (
+                <p className="muted small">
+                  The detection view shows what the provisional impression is based on —
+                  every box and ring is visible even on a rejected photo.
+                </p>
+              )}
+            </div>
+            {scan.grade && <FindingsLine scan={scan} />}
+          </div>
         </div>
       ) : (
         m && (

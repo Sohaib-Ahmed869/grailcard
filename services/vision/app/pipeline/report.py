@@ -22,6 +22,32 @@ def _b64_png(image: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _draw_findings(overlay, findings) -> None:
+    """Draw surface-mark boxes and corner condition rings on the overlay."""
+    oh, ow = overlay.shape[:2]
+    for c in findings.get("clusters", []):
+        x0, y0 = int(c["x"] * ow), int(c["y"] * oh)
+        x1, y1 = x0 + max(int(c["w"] * ow), 6), y0 + max(int(c["h"] * oh), 6)
+        cv2.rectangle(overlay, (x0 - 4, y0 - 4), (x1 + 4, y1 + 4), (60, 60, 235), 2)
+
+    corner_pts = {"TL": (26, 26), "TR": (ow - 26, 26), "BL": (26, oh - 26), "BR": (ow - 26, oh - 26)}
+    for d in findings.get("corners", []):
+        pt = corner_pts.get(d["corner"])
+        if not pt:
+            continue
+        s = d["score"]
+        color = (80, 200, 60) if s >= 9 else (60, 200, 235) if s >= 7 else (60, 60, 235)
+        cv2.circle(overlay, pt, 20, color, 3)
+        cv2.putText(
+            overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3,
+        )
+        cv2.putText(
+            overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1,
+        )
+
+
 def _quality_dict(q) -> dict:
     return {
         "blurScore": q.blur_score,
@@ -59,9 +85,13 @@ def run_pipeline(
         # offer a PROVISIONAL impression — clearly labeled, never charged,
         # never sent to the paid grader
         grade_dict = None
+        overlay_b64 = None
         if det is not None:
             cen = measure_centering(det.warped)
             grade = compute_grade(det.warped, cen, low_detail=True, bg_color=det.bg_color)
+            _draw_findings(cen.overlay, grade.findings)
+            if include_images:
+                overlay_b64 = _b64_png(cen.overlay)
             sub = lambda s: {"value": s.value, "confidence": round(s.confidence * 0.5, 2)} if s else None
             grade_dict = {
                 "overall": grade.overall,
@@ -92,7 +122,7 @@ def run_pipeline(
             "authenticity": digital_source_check(det.warped) if det is not None else None,
             "ocr": ocr,
             "warpedImageB64": _b64_png(det.warped) if include_images and det else None,
-            "overlayImageB64": None,
+            "overlayImageB64": overlay_b64,
         }
 
     cen = measure_centering(det.warped)
@@ -114,30 +144,8 @@ def run_pipeline(
         "notes": grade.notes,
     }
 
-    # draw detected surface marks on the overlay so findings are visible
-    oh, ow = cen.overlay.shape[:2]
-    for c in grade.findings.get("clusters", []):
-        x0, y0 = int(c["x"] * ow), int(c["y"] * oh)
-        x1, y1 = x0 + max(int(c["w"] * ow), 6), y0 + max(int(c["h"] * oh), 6)
-        cv2.rectangle(cen.overlay, (x0 - 4, y0 - 4), (x1 + 4, y1 + 4), (60, 60, 235), 2)
-
-    # corner condition rings, colored by each corner's score
-    corner_pts = {"TL": (26, 26), "TR": (ow - 26, 26), "BL": (26, oh - 26), "BR": (ow - 26, oh - 26)}
-    for d in grade.findings.get("corners", []):
-        pt = corner_pts.get(d["corner"])
-        if not pt:
-            continue
-        s = d["score"]
-        color = (80, 200, 60) if s >= 9 else (60, 200, 235) if s >= 7 else (60, 60, 235)
-        cv2.circle(cen.overlay, pt, 20, color, 3)
-        cv2.putText(
-            cen.overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3,
-        )
-        cv2.putText(
-            cen.overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1,
-        )
+    # draw detected surface marks and corner rings on the overlay
+    _draw_findings(cen.overlay, grade.findings)
     measurement = {
         "centering": {
             "front": {"lr": cen.lr, "tb": cen.tb, "measurable": cen.measurable},
