@@ -239,6 +239,14 @@ function Viewer({ scan }: { scan: Scan }) {
         <img src={`${API}/storage/${key}`} alt="scan" />
         {grid && <div className="measure-grid" />}
       </div>
+      {mode === "overlay" && (
+        <div className="muted small" style={{ marginTop: 6, lineHeight: 1.5 }}>
+          <span style={{ color: "#28dcc8" }}>■</span> measured border lines &amp; points ·{" "}
+          <span style={{ color: "#eb3c3c" }}>■</span> surface marks (scratches / print lines) ·{" "}
+          <span style={{ color: "#3cc850" }}>●</span>/<span style={{ color: "#ebc83c" }}>●</span>/
+          <span style={{ color: "#eb3c3c" }}>●</span> corner condition rings (score below each)
+        </div>
+      )}
     </div>
   );
 }

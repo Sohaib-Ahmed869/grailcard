@@ -96,35 +96,91 @@ def _corner_mask(n: int) -> np.ndarray:
     return ring
 
 
-def _corner_grade(warped: np.ndarray) -> Subgrade:
-    """Inside the region that should be card stock (past the design corner
-    radius), any strong deviation — whitening, exposed cardboard, or extra
-    background from a worn-round corner — reads as wear."""
+# background may intrude this deep (px from the corner point) before it
+# counts as wear — covers normal factory corner rounding plus warp slack
+CORNER_BG_BASELINE_PX = 13.0
+
+
+def _corner_grade(warped: np.ndarray, bg_color=None) -> tuple:
+    """Two complementary signals per corner; the geometric one works on ANY
+    design (full-art included):
+    1. GEOMETRY — a worn/rounded/dinged corner lets the BACKGROUND (its true
+       color, sampled around the card in the original photo) intrude deeper
+       past the corner point than factory rounding allows.
+    2. STOCK WEAR — whitening / exposed cardboard against uniform border
+       stock (only when the corner ring actually is uniform stock).
+    Returns (Subgrade, per-corner detail list for the overlay)."""
     h, w = warped.shape[:2]
     n = 52
     m = 4  # skip the warp seam: the quad sits a pixel or two outside the card
-    mask = _corner_mask(n)
+    ring = _corner_mask(n)
+    yy, xx = np.mgrid[:n, :n]
+    dist_from_corner = np.sqrt(xx.astype(np.float32) ** 2 + yy.astype(np.float32) ** 2)
     crops = [
-        warped[m : m + n, m : m + n],
-        warped[m : m + n, w - m - n : w - m][:, ::-1],
-        warped[h - m - n : h - m, m : m + n][::-1, :],
-        warped[h - m - n : h - m, w - m - n : w - m][::-1, ::-1],
+        ("TL", warped[m : m + n, m : m + n]),
+        ("TR", warped[m : m + n, w - m - n : w - m][:, ::-1]),
+        ("BL", warped[h - m - n : h - m, m : m + n][::-1, :]),
+        ("BR", warped[h - m - n : h - m, w - m - n : w - m][::-1, ::-1]),
     ]
-    results = []  # (score, uniform_frac)
-    for crop in crops:
+    per_corner = []  # (name, geo_score, wear_score)
+    for name, crop in crops:
         f = crop.astype(np.float32)
-        stock = f[mask]
-        med = np.median(stock.reshape(-1, 3), axis=0)
-        dev = np.linalg.norm(stock - med, axis=1)
-        wear_frac = float(_wear_mask(stock, med).mean())
-        results.append((max(1.0, 10.0 - wear_frac * 40.0), float((dev < 60).mean())))
 
-    score, uniform = min(results, key=lambda r: r[0])
-    # wear can only be judged against recognizable card stock; a mostly
-    # non-uniform ring is DESIGN (full-bleed art), not damage
-    if uniform < 0.55:
-        return None
-    return Subgrade(value=round(score * 2) / 2, confidence=0.4)
+        stock = f[ring]
+        med = np.median(stock.reshape(-1, 3), axis=0)
+
+        # geometric: how deep does true-background color reach past the
+        # corner point? Only counts background CONNECTED to the corner (dark
+        # print text that happens to match the background is an island), and
+        # only when background is distinguishable from the card stock at all.
+        geo_score = None
+        if bg_color is not None:
+            bg_ref = np.asarray(bg_color, dtype=np.float32)
+            if float(np.linalg.norm(bg_ref - med)) > 60.0:
+                bg_mask = (np.linalg.norm(f - bg_ref, axis=2) < 48.0).astype(np.uint8)
+                cnt, labels = cv2.connectedComponents(bg_mask, connectivity=8)
+                corner_labels = set(
+                    labels[(dist_from_corner < CORNER_BG_BASELINE_PX) & (bg_mask > 0)].tolist()
+                ) - {0}
+                if corner_labels:
+                    connected = np.isin(labels, list(corner_labels))
+                    depth = float(np.percentile(dist_from_corner[connected], 95))
+                    geo_score = max(
+                        1.0, 10.0 - 0.35 * max(0.0, depth - CORNER_BG_BASELINE_PX)
+                    )
+                else:
+                    geo_score = 10.0  # no background reaches the corner at all
+
+        # stock wear on the rim ring (uniform stock only)
+        dev = np.linalg.norm(stock - med, axis=1)
+        uniform = float((dev < 60).mean())
+        wear_score = None
+        if uniform >= 0.55:
+            wear_frac = float(_wear_mask(stock, med).mean())
+            wear_score = max(1.0, 10.0 - wear_frac * 40.0)
+
+        per_corner.append((name, geo_score, wear_score))
+
+    # all four corners geo-flooring identically is a detection artifact (the
+    # quad included a margin of background around the card, e.g. inside a
+    # slab) — real wear is asymmetric. Discard geometry in that case.
+    geo_vals = [g for _, g, _ in per_corner if g is not None]
+    if len(geo_vals) == 4 and max(geo_vals) <= 2.0:
+        per_corner = [(nm, None, ws) for nm, _, ws in per_corner]
+
+    details = []
+    scores = []
+    for name, geo_score, wear_score in per_corner:
+        candidates = [s for s in (geo_score, wear_score) if s is not None]
+        corner_score = min(candidates) if candidates else None
+        if corner_score is not None:
+            scores.append(corner_score)
+            details.append({"corner": name, "score": round(corner_score * 2) / 2})
+
+    if not scores:
+        return None, details
+    value = round(min(scores) * 2) / 2
+    return Subgrade(value=value, confidence=0.4), details
 
 
 def _edge_grade(warped: np.ndarray) -> Subgrade:
@@ -234,16 +290,21 @@ def _surface_grade(warped: np.ndarray) -> tuple:
 
 
 def compute_grade(
-    warped: np.ndarray, cen: CenteringResult, low_detail: bool = False
+    warped: np.ndarray,
+    cen: CenteringResult,
+    low_detail: bool = False,
+    bg_color=None,
 ) -> GradeResult:
     centering = _centering_grade(cen)
-    corners = _corner_grade(warped)
+    corners, corner_details = _corner_grade(warped, bg_color=bg_color)
     edges = _edge_grade(warped)
     surface, findings = _surface_grade(warped)
+    findings["corners"] = corner_details
 
     # strong illumination gradient (card shot standing / under side-light)
-    # makes shadow read as damage — corner and edge wear claims are not
-    # trustworthy under those conditions, so we refuse to make them.
+    # makes shadow read as damage — edge wear claims are not trustworthy
+    # under those conditions. Corner GEOMETRY survives it (boundary contrast
+    # persists in shadow), so corners keep their score at lower confidence.
     # Measured on the BORDER strips: border stock is the same color all
     # around, so brightness asymmetry there is lighting, not artwork.
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -255,8 +316,9 @@ def compute_grade(
     right_strip = float(gray[m : h - m, w - s - t : w - s].mean())
     uneven_light = max(abs(top_strip - bottom_strip), abs(left_strip - right_strip)) > 22.0
     if uneven_light:
-        corners = None
         edges = None
+        if corners is not None:
+            corners = Subgrade(value=corners.value, confidence=0.25)
 
     # full-art / foil designs (nothing assessable but surface) produce many
     # false surface positives from holo texture and pale art — soften the
@@ -268,9 +330,9 @@ def compute_grade(
     notes = ["Corner, edge, and surface scores are heuristic (v0) — no trained models yet."]
     if uneven_light:
         notes.append(
-            "Uneven lighting across the card (angled shot or side-light): corner and edge "
-            "wear can't be separated from shadow, so they're not assessed. Shoot the card "
-            "flat under even light for a full assessment."
+            "Uneven lighting across the card (angled shot or side-light): edge wear can't "
+            "be separated from shadow, so edges aren't assessed and corner confidence is "
+            "reduced. Shoot the card flat under even light for a full assessment."
         )
     if full_art:
         notes.append(

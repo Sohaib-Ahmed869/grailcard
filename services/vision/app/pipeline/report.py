@@ -61,7 +61,7 @@ def run_pipeline(
         grade_dict = None
         if det is not None:
             cen = measure_centering(det.warped)
-            grade = compute_grade(det.warped, cen, low_detail=True)
+            grade = compute_grade(det.warped, cen, low_detail=True, bg_color=det.bg_color)
             sub = lambda s: {"value": s.value, "confidence": round(s.confidence * 0.5, 2)} if s else None
             grade_dict = {
                 "overall": grade.overall,
@@ -96,7 +96,9 @@ def run_pipeline(
         }
 
     cen = measure_centering(det.warped)
-    grade = compute_grade(det.warped, cen, low_detail=gate.quality.low_detail)
+    grade = compute_grade(
+        det.warped, cen, low_detail=gate.quality.low_detail, bg_color=det.bg_color
+    )
     sub = lambda s: {"value": s.value, "confidence": s.confidence} if s else None
     grade_dict = {
         "overall": grade.overall,
@@ -118,6 +120,24 @@ def run_pipeline(
         x0, y0 = int(c["x"] * ow), int(c["y"] * oh)
         x1, y1 = x0 + max(int(c["w"] * ow), 6), y0 + max(int(c["h"] * oh), 6)
         cv2.rectangle(cen.overlay, (x0 - 4, y0 - 4), (x1 + 4, y1 + 4), (60, 60, 235), 2)
+
+    # corner condition rings, colored by each corner's score
+    corner_pts = {"TL": (26, 26), "TR": (ow - 26, 26), "BL": (26, oh - 26), "BR": (ow - 26, oh - 26)}
+    for d in grade.findings.get("corners", []):
+        pt = corner_pts.get(d["corner"])
+        if not pt:
+            continue
+        s = d["score"]
+        color = (80, 200, 60) if s >= 9 else (60, 200, 235) if s >= 7 else (60, 60, 235)
+        cv2.circle(cen.overlay, pt, 20, color, 3)
+        cv2.putText(
+            cen.overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3,
+        )
+        cv2.putText(
+            cen.overlay, f"{s:g}", (pt[0] - 12, pt[1] + 38),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1,
+        )
     measurement = {
         "centering": {
             "front": {"lr": cen.lr, "tb": cen.tb, "measurable": cen.measurable},

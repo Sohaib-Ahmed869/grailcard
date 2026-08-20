@@ -18,6 +18,7 @@ class Detection:
     quad: np.ndarray  # 4x2 float32 source corners (tl, tr, br, bl)
     card_area_frac: float  # quad area / image area
     source_short_side_px: float  # card's short side length in source pixels
+    bg_color: tuple = (0, 0, 0)  # median BGR of the surface around the card
 
 
 def _order_corners(pts: np.ndarray) -> np.ndarray:
@@ -107,9 +108,19 @@ def detect_card(image: np.ndarray) -> Detection | None:
     area_frac = cv2.contourArea(quad.astype(np.float32)) / float(
         image.shape[0] * image.shape[1]
     )
+
+    # sample the true background: a band just outside the quad
+    ih, iw = image.shape[:2]
+    inner = np.zeros((ih, iw), np.uint8)
+    cv2.fillPoly(inner, [quad.astype(np.int32)], 255)
+    band = cv2.dilate(inner, np.ones((25, 25), np.uint8)) & ~inner
+    bg_px = image[band > 0]
+    bg_color = tuple(float(v) for v in np.median(bg_px.reshape(-1, 3), axis=0)) if bg_px.size else (0.0, 0.0, 0.0)
+
     return Detection(
         warped=warped,
         quad=quad,
         card_area_frac=float(area_frac),
         source_short_side_px=float(min(w, h)),
+        bg_color=bg_color,
     )
