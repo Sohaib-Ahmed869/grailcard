@@ -17,7 +17,7 @@ export type LlmIdentification = {
 };
 
 const PROMPT = `Identify this trading card from the photo. Respond with JSON only:
-{"name": "...", "game": "pokemon|mtg|yugioh|onepiece|lorcana|digimon|starwars|sports|other", "setName": "... or null", "edition": "... or null", "language": "en|ja|other|unknown", "confident": true|false}
+{"name": "...", "game": "pokemon|mtg|yugioh|onepiece|lorcana|digimon|starwars|dragonball|gundam|unionarena|riftbound|sports|other", "setName": "... or null", "edition": "... or null", "language": "en|ja|other|unknown", "confident": true|false}
 Rules:
 - "name" is the card's title exactly as officially known (English official name if it exists).
 - If you are not reasonably sure of a field, use null (or "confident": false).
@@ -66,7 +66,10 @@ export async function identifyWithGemini(
     const game = typeof parsed.game === "string" ? parsed.game.toLowerCase() : "other";
     return {
       name: parsed.name,
-      game: ["pokemon", "mtg", "yugioh", "onepiece", "lorcana", "digimon", "starwars", "sports"].includes(game)
+      game: [
+        "pokemon", "mtg", "yugioh", "onepiece", "lorcana", "digimon",
+        "starwars", "dragonball", "gundam", "unionarena", "riftbound", "sports",
+      ].includes(game)
         ? game
         : "other",
       setName: typeof parsed.setName === "string" ? parsed.setName : null,

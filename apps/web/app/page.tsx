@@ -695,6 +695,12 @@ function EbayComps({ scan }: { scan: Scan }) {
       <div className="muted" style={{ marginBottom: 6 }}>
         eBay sold listings <span className="small">(real completed sales — the ground truth)</span>
       </div>
+      {!scan.valuation && (
+        <p className="muted small" style={{ margin: "0 0 8px" }}>
+          No price database covers this card&apos;s game — these sold listings are the best
+          pricing that exists for it, from any tool.
+        </p>
+      )}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <a className="ebay-link" href={ebaySoldUrl(base)} target="_blank" rel="noreferrer">
           Raw sold listings →

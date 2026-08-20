@@ -17,6 +17,7 @@ import {
   identifyYgo,
 } from "./othergames.js";
 import { buildRecommendation, conditionMultiplier } from "./recommend.js";
+import { similarity } from "./similarity.js";
 import { fetchRelated } from "./related.js";
 import { buildSummary } from "./summarize.js";
 import { identifyCard } from "./tcgdex.js";
@@ -96,7 +97,7 @@ export class ScansService {
             note: frontRes.ocr.japaneseTextDetected
               ? "Japanese text detected on the card — this is (or includes) a Japanese-language printing."
               : (frontRes.ocr.language ?? "unknown") === "en"
-                ? "English-language printing (no Japanese text detected)."
+                ? "Rules text reads as English — treated as an English-language printing. Stylized art lettering (which can be Japanese on promos) is not part of this call."
                 : "Card language could not be determined from the photo.",
           }
         : null,
@@ -206,10 +207,46 @@ export class ScansService {
             ocrName: names[0] ?? "(from image)",
             game: opinion.game,
           };
+        } else if (
+          opinion &&
+          opinion.game === match.identification.game &&
+          similarity(opinion.name, match.identification.name) < 0.75
+        ) {
+          // same game but a very different card name: OCR fragments matched
+          // the wrong card (generic "Charizard" beating "Mega Charizard X ex").
+          // Redo the catalog lookup with the LLM's full name.
+          const redoOcr = {
+            nameCandidates: [opinion.name],
+            collectorNumber: frontRes.ocr.collectorNumber ?? null,
+            setCode: frontRes.ocr.setCode ?? null,
+            texts: frontRes.ocr.texts ?? [],
+            language: (frontRes.ocr.language ?? "unknown") as "en" | "ja" | "unknown",
+            japaneseTextDetected: frontRes.ocr.japaneseTextDetected ?? false,
+          };
+          const redo =
+            opinion.game === "pokemon"
+              ? await identifyCard(redoOcr, frontRes.warpedImageB64)
+              : opinion.game === "mtg"
+                ? await identifyScryfall([opinion.name])
+                : opinion.game === "yugioh"
+                  ? await identifyYgo([opinion.name])
+                  : opinion.game === "lorcana"
+                    ? await identifyLorcana([opinion.name])
+                    : null;
+          if (redo) match = redo;
         } else if (!opinion && match.identification.matchScore < 0.72) {
           // no second opinion available and the match is weak — asserting it
           // would be guessing. Fall through to the described-from-text path.
           match = undefined as unknown as typeof match;
+        }
+        // the vision LLM reads Japanese art text the OCR model can't — its
+        // language verdict outranks the OCR-based origin guess
+        if (opinion?.language === "ja" && scan.origin) {
+          scan.origin = {
+            language: "ja",
+            japaneseTextDetected: true,
+            note: "Japanese text identified on the card by AI vision — this is (or includes) a Japanese-language printing.",
+          };
         }
       }
 

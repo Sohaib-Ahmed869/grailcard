@@ -116,7 +116,12 @@ export async function identifyCard(
     }
   }
 
-  let ranked = [...candidates.values()].sort((a, b) => b.score - a.score).slice(0, 5);
+  // tie-break equal scores toward the more specific (longer) card name —
+  // "Charizard" exact-matches dozens of cards; "Mega Charizard X ex" is
+  // nearly unique
+  let ranked = [...candidates.values()]
+    .sort((a, b) => b.score - a.score || b.card.name.length - a.card.name.length)
+    .slice(0, 5);
 
   // visual cross-check: dHash the scan against the top candidates' images.
   // Confirms the name match and separates same-name cards from different sets.
@@ -142,6 +147,9 @@ export async function identifyCard(
   // a partial name hit ("LARA" -> Pokemon's "Klara") whose image looks
   // NOTHING like the candidate is a false positive, not a match
   if (bestVisual != null && bestVisual < 0.55 && best.score < 0.9) return null;
+  // without visual confirmation, even an exact name match isn't certainty —
+  // cap the score so the LLM arbitration downstream gets a look
+  if (bestVisual == null) best.score = Math.min(best.score, 0.85);
 
   const detail = (await fetchJson(`${TCGDEX}/cards/${best.card.id}`)) as {
     set?: { id: string; name: string };
