@@ -106,6 +106,26 @@ type Scan = {
   } | null;
 };
 
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  useEffect(() => {
+    const saved = (localStorage.getItem("gc-theme") as "dark" | "light") || "dark";
+    setTheme(saved);
+    document.documentElement.dataset.theme = saved;
+  }, []);
+  const flip = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("gc-theme", next);
+  };
+  return (
+    <button className="theme-toggle" onClick={flip}>
+      {theme === "dark" ? "☀ Light" : "☾ Dark"}
+    </button>
+  );
+}
+
 const SCAN_STEPS = [
   "Detecting card…",
   "Checking photo quality…",
@@ -149,7 +169,7 @@ function CaptureSlot({
         {label} {required ? "" : "(optional)"}
       </div>
       <div
-        className="scan-frame"
+        className={`scan-frame${scanning ? " scanning" : ""}`}
         onClick={() => !scanning && inputRef.current?.click()}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -291,9 +311,9 @@ function GradeGauge({
     const [lx, ly] = gaugePoint(cx, cy, r + 29, frac(v));
     ticks.push(
       <g key={v}>
-        <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="#3a4250" strokeWidth={major ? 2 : 1.5} />
+        <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="var(--track-strong)" strokeWidth={major ? 2 : 1.5} />
         {major && (
-          <text x={lx} y={ly + 4} textAnchor="middle" fontSize={11} fill="#9aa3ad">
+          <text x={lx} y={ly + 4} textAnchor="middle" fontSize={11} fill="var(--muted)">
             {v}
           </text>
         )}
@@ -304,7 +324,7 @@ function GradeGauge({
     <svg viewBox="0 0 240 140" className="gauge">
       <path
         d={gaugeArc(cx, cy, r, 0, 1)}
-        stroke="#242a33"
+        stroke="var(--track)"
         strokeWidth={13}
         fill="none"
         strokeLinecap="round"
@@ -330,13 +350,13 @@ function GradeGauge({
         cy={gaugePoint(cx, cy, r, frac(overall))[1]}
         r={6.5}
         fill={gradeColor(overall)}
-        stroke="#0e1013"
+        stroke="var(--bg)"
         strokeWidth={2.5}
       />
-      <text x={cx} y={cy - 12} textAnchor="middle" fontSize={34} fontWeight={800} fill="#e8eaed">
+      <text x={cx} y={cy - 12} textAnchor="middle" fontSize={34} fontWeight={800} fill="var(--text)">
         {overall.toFixed(1)}
       </text>
-      <text x={cx} y={cy + 8} textAnchor="middle" fontSize={10} letterSpacing={2} fill="#9aa3ad">
+      <text x={cx} y={cy + 8} textAnchor="middle" fontSize={10} letterSpacing={2} fill="var(--muted)">
         GC ESTIMATE
       </text>
     </svg>
@@ -362,7 +382,7 @@ function RadarChart({ g }: { g: NonNullable<Scan["grade"]> }) {
       key={f}
       points={RADAR_AXES.map((_, i) => pt(i, R * f).join(",")).join(" ")}
       fill="none"
-      stroke="#242a33"
+      stroke="var(--track)"
       strokeWidth={f === 1 ? 1.5 : 1}
     />
   ));
@@ -375,21 +395,21 @@ function RadarChart({ g }: { g: NonNullable<Scan["grade"]> }) {
       {rings}
       {RADAR_AXES.map((_, i) => {
         const [x, y] = pt(i, R);
-        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="#242a33" strokeWidth={1} />;
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--track)" strokeWidth={1} />;
       })}
-      <polygon points={shape} fill="rgba(77,163,255,0.22)" stroke="#4da3ff" strokeWidth={2} />
+      <polygon points={shape} fill="var(--radar-fill)" stroke="var(--accent)" strokeWidth={2} />
       {RADAR_AXES.map(([label], i) => {
         const sub = subs[i];
         const [vx, vy] = pt(i, ((sub?.value ?? 0) / 10) * R);
         const [lx, ly] = pt(i, R + 22);
         return (
           <g key={label}>
-            {sub && <circle cx={vx} cy={vy} r={4} fill={gradeColor(sub.value)} stroke="#0e1013" strokeWidth={1.5} />}
-            <text x={lx} y={ly} textAnchor="middle" fontSize={11} fill="#9aa3ad">
+            {sub && <circle cx={vx} cy={vy} r={4} fill={gradeColor(sub.value)} stroke="var(--bg)" strokeWidth={1.5} />}
+            <text x={lx} y={ly} textAnchor="middle" fontSize={11} fill="var(--muted)">
               {label}
             </text>
             <text x={lx} y={ly + 13} textAnchor="middle" fontSize={12} fontWeight={700}
-              fill={sub ? gradeColor(sub.value) : "#5a6472"}>
+              fill={sub ? gradeColor(sub.value) : "var(--muted)"}>
               {sub ? sub.value.toFixed(1) : "n/a"}
             </text>
           </g>
@@ -487,17 +507,17 @@ function CenteringDiagram({ c }: { c: SideCentering }) {
   const top = (by * c.tb) / 100;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="centering-diagram">
-      <rect x={1} y={1} width={W - 2} height={H - 2} rx={6} fill="#1d2127" stroke="#3a4250" strokeWidth={1.5} />
-      <line x1={W / 2} y1={4} x2={W / 2} y2={H - 4} stroke="#242a33" strokeDasharray="3 4" />
-      <line x1={4} y1={H / 2} x2={W - 4} y2={H / 2} stroke="#242a33" strokeDasharray="3 4" />
+      <rect x={1} y={1} width={W - 2} height={H - 2} rx={6} fill="var(--panel-2)" stroke="var(--track-strong)" strokeWidth={1.5} />
+      <line x1={W / 2} y1={4} x2={W / 2} y2={H - 4} stroke="var(--track)" strokeDasharray="3 4" />
+      <line x1={4} y1={H / 2} x2={W - 4} y2={H / 2} stroke="var(--track)" strokeDasharray="3 4" />
       <rect
         x={1 + left}
         y={1 + top}
         width={W - 2 - bx}
         height={H - 2 - by}
         rx={3}
-        fill="rgba(77,163,255,0.14)"
-        stroke="#4da3ff"
+        fill="var(--radar-fill)"
+        stroke="var(--accent)"
         strokeWidth={1.5}
       />
     </svg>
@@ -947,10 +967,15 @@ export default function Home() {
 
   return (
     <main>
-      <h1>Grailcard</h1>
-      <p className="tagline">
-        Centering, measured — not guessed. Bad photos get rejected, not graded.
-      </p>
+      <div className="topbar">
+        <div>
+          <h1>Grailcard</h1>
+          <p className="tagline">
+            Centering, measured — not guessed. Bad photos get rejected, not graded.
+          </p>
+        </div>
+        <ThemeToggle />
+      </div>
 
       <div className="slots">
         <CaptureSlot label="Front" required file={front} onPick={setFront} scanning={busy} />
