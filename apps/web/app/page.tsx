@@ -156,30 +156,13 @@ function ChangeChip({ value, label }: { value?: number | null; label: string }) 
   );
 }
 
-function MarketPulse() {
-  const [cards, setCards] = useState<PulseCard[] | null>(null);
-  useEffect(() => {
-    fetch(`${API}/market/pulse`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then(setCards)
-      .catch(() => setCards([]));
-  }, []);
-
+function PulseCards({ cards }: { cards: PulseCard[] }) {
   return (
-    <aside className="pulse">
-      <div className="pulse-head">
-        <span className="pulse-dot" />
-        <div>
-          <div className="pulse-title">Market Pulse</div>
-          <div className="muted small">live rates across the hobby</div>
-        </div>
-      </div>
-      {cards === null &&
-        [1, 2, 3, 4, 5].map((i) => <div className="pulse-card shimmer" key={i} />)}
-      {cards?.map((c) => {
+    <>
+      {cards.map((c, i) => {
         const up = (c.change7d ?? c.change24h ?? 0) >= 0;
         return (
-          <div className="pulse-card" key={c.label + c.setName}>
+          <div className="pulse-card" key={c.label + c.setName + i}>
             <div className="pulse-row">
               <div>
                 <div className="pulse-name">{c.label}</div>
@@ -193,21 +176,100 @@ function MarketPulse() {
             <div className="pulse-chips">
               <ChangeChip value={c.change24h} label="24h" />
               <ChangeChip value={c.change7d} label="7d" />
-              {c.low7 != null && c.high7 != null && (
-                <span className="muted small">
-                  7d ${c.low7.toFixed(2)}–${c.high7.toFixed(2)}
-                </span>
-              )}
             </div>
           </div>
         );
       })}
-      {cards && cards.length === 0 && (
-        <div className="muted small">Market data warming up — check back shortly.</div>
-      )}
-      <div className="muted small" style={{ marginTop: 6 }}>
-        Source: JustTCG market data · refreshes twice daily
+    </>
+  );
+}
+
+function MarketPulse() {
+  const [cards, setCards] = useState<PulseCard[] | null>(null);
+  useEffect(() => {
+    fetch(`${API}/market/pulse`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setCards)
+      .catch(() => setCards([]));
+  }, []);
+
+  return (
+    <aside className="rail pulse">
+      <div className="pulse-head">
+        <span className="pulse-dot" />
+        <div>
+          <div className="pulse-title">Market Pulse</div>
+          <div className="muted small">live rates · drifting, hover to hold</div>
+        </div>
       </div>
+      <div className="ticker">
+        {cards === null && [1, 2, 3, 4].map((i) => <div className="pulse-card shimmer" key={i} />)}
+        {cards && cards.length > 0 && (
+          <div className="ticker-track">
+            <PulseCards cards={cards} />
+            <PulseCards cards={cards} />
+          </div>
+        )}
+      </div>
+      <div className="muted small rail-source">JustTCG market data · refreshes twice daily</div>
+    </aside>
+  );
+}
+
+type NewsItem = { title: string; source: string; link: string; publishedAt: string };
+
+function timeAgo(iso: string): string {
+  const mins = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function NewsItems({ items }: { items: NewsItem[] }) {
+  return (
+    <>
+      {items.map((n, i) => (
+        <a className="news-item" href={n.link} target="_blank" rel="noreferrer" key={n.link + i}>
+          <div className="news-meta">
+            <span className="news-source">{n.source}</span>
+            <span className="muted small">{timeAgo(n.publishedAt)}</span>
+          </div>
+          <div className="news-title">{n.title}</div>
+        </a>
+      ))}
+    </>
+  );
+}
+
+function NewsFeed() {
+  const [items, setItems] = useState<NewsItem[] | null>(null);
+  useEffect(() => {
+    fetch(`${API}/market/news`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setItems)
+      .catch(() => setItems([]));
+  }, []);
+
+  return (
+    <aside className="rail news">
+      <div className="pulse-head">
+        <span className="pulse-dot violet" />
+        <div>
+          <div className="pulse-title">Hobby Wire</div>
+          <div className="muted small">card world news · hover to hold</div>
+        </div>
+      </div>
+      <div className="ticker slow">
+        {items === null && [1, 2, 3, 4, 5].map((i) => <div className="news-item shimmer" key={i} />)}
+        {items && items.length > 0 && (
+          <div className="ticker-track">
+            <NewsItems items={items} />
+            <NewsItems items={items} />
+          </div>
+        )}
+      </div>
+      <div className="muted small rail-source">Google News · refreshes every 45 min</div>
     </aside>
   );
 }
@@ -1085,6 +1147,7 @@ export default function Home() {
 
   return (
     <main className="shell">
+      <NewsFeed />
       <div className="content">
       <div className="topbar">
         <div>

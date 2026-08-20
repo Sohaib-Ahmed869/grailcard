@@ -28,6 +28,85 @@ const WATCHLIST: { q: string; game: string; label?: string }[] = [
 const TTL_MS = 12 * 3600 * 1000;
 let cache: { at: number; data: PulseCard[] } | null = null;
 
+// ---------------- hobby news (Google News RSS — free, no key) ----------------
+
+export type NewsItem = {
+  title: string;
+  source: string;
+  link: string;
+  publishedAt: string;
+};
+
+const NEWS_QUERIES = [
+  '"pokemon card" OR "charizard card"',
+  '"trading card" auction OR record OR PSA OR graded',
+  '"sports card" OR "one piece card game" OR "lorcana"',
+];
+
+const NEWS_TTL_MS = 45 * 60 * 1000;
+let newsCache: { at: number; data: NewsItem[] } | null = null;
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
+function parseRss(xml: string): NewsItem[] {
+  const items: NewsItem[] = [];
+  const chunks = xml.split("<item>").slice(1);
+  for (const chunk of chunks) {
+    const title = chunk.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/)?.[1];
+    const link = chunk.match(/<link>([\s\S]*?)<\/link>/)?.[1];
+    const pub = chunk.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1];
+    const source = chunk.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1];
+    if (!title || !link) continue;
+    items.push({
+      title: decodeEntities(title),
+      source: decodeEntities(source ?? "News"),
+      link: link.trim(),
+      publishedAt: pub ? new Date(pub).toISOString() : new Date(0).toISOString(),
+    });
+  }
+  return items;
+}
+
+export async function cardNews(): Promise<NewsItem[]> {
+  if (newsCache && Date.now() - newsCache.at < NEWS_TTL_MS) return newsCache.data;
+  const all: NewsItem[] = [];
+  for (const q of NEWS_QUERIES) {
+    try {
+      const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": "grailcard/0.1" },
+      });
+      if (!res.ok) continue;
+      all.push(...parseRss(await res.text()));
+    } catch {
+      /* best-effort per feed */
+    }
+  }
+  // dedupe by title, newest first, keep a tickerful
+  const seen = new Set<string>();
+  const deduped = all
+    .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+    .filter((n) => {
+      const k = n.title.toLowerCase().slice(0, 60);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, 24);
+  if (deduped.length > 0) newsCache = { at: Date.now(), data: deduped };
+  return newsCache?.data ?? deduped;
+}
+
 function pct(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null;
 }

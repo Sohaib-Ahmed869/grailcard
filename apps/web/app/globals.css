@@ -65,18 +65,30 @@ body {
 }
 
 main.shell {
-  max-width: 1320px;
+  max-width: 1560px;
   margin: 0 auto;
   padding: 36px 20px 90px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 312px;
-  gap: 28px;
+  grid-template-columns: 272px minmax(0, 1fr) 300px;
+  gap: 26px;
   align-items: start;
+}
+
+@media (max-width: 1240px) {
+  main.shell {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+  .rail.news {
+    display: none;
+  }
 }
 
 @media (max-width: 1080px) {
   main.shell {
     grid-template-columns: 1fr;
+  }
+  .rail.news {
+    display: block;
   }
 }
 
@@ -84,9 +96,9 @@ main.shell {
   min-width: 0;
 }
 
-/* ============ MARKET PULSE ============ */
+/* ============ SIDE RAILS (pulse + news tickers) ============ */
 
-.pulse {
+.rail {
   position: sticky;
   top: 24px;
   background:
@@ -94,8 +106,52 @@ main.shell {
     linear-gradient(160deg, var(--accent), var(--border) 35%, var(--border) 70%, var(--accent-2)) border-box;
   border: 1px solid transparent;
   border-radius: 20px;
-  padding: 18px;
+  padding: 18px 18px 12px;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+}
+
+.rail.news {
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(200deg, var(--accent-2), var(--border) 35%, var(--border) 70%, var(--accent)) border-box;
+}
+
+.rail-source {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+
+/* vertical auto-drift ticker: track holds two copies of the content and
+   slides up by half its height for a seamless loop; hover pauses */
+.ticker {
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  mask-image: linear-gradient(to bottom, transparent, black 6%, black 94%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 6%, black 94%, transparent);
+}
+
+.ticker-track {
+  animation: driftY 45s linear infinite;
+  will-change: transform;
+}
+
+.ticker.slow .ticker-track {
+  animation-duration: 70s;
+}
+
+.ticker:hover .ticker-track {
+  animation-play-state: paused;
+}
+
+@keyframes driftY {
+  from { transform: translateY(0); }
+  to { transform: translateY(-50%); }
 }
 
 .pulse-head {
@@ -109,6 +165,10 @@ main.shell {
   font-size: 17px;
   font-weight: 800;
   letter-spacing: -0.01em;
+}
+
+.pulse-dot.violet {
+  background: var(--accent-2);
 }
 
 .pulse-dot {
@@ -202,6 +262,61 @@ main.shell {
 .chip.down {
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
+}
+
+/* news items */
+
+.news-item {
+  display: block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 11px 13px;
+  margin-bottom: 10px;
+  text-decoration: none;
+  color: var(--text);
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.news-item:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-2);
+}
+
+.news-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.news-source {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.news-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-item.shimmer {
+  height: 74px;
+  background: linear-gradient(100deg, var(--panel-2) 40%, color-mix(in srgb, var(--text) 6%, var(--panel-2)) 50%, var(--panel-2) 60%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s infinite;
 }
 
 .pulse-card.shimmer {
