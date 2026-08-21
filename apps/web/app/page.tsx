@@ -88,6 +88,12 @@ type Scan = {
       psa9?: number | null;
       psa10?: number | null;
       estimated?: boolean;
+      citations?: { label: string; url: string }[] | null;
+    } | null;
+    webEstimate?: {
+      value: number;
+      sampleSize: number;
+      citations: { label: string; url: string }[];
     } | null;
     tcgplayer?: {
       unit: string;
@@ -472,6 +478,29 @@ function gradeColor(v: number) {
 
 function GradePanel({ scan }: { scan: Scan }) {
   const g = scan.grade;
+  const aud = useAud();
+  const v = scan.valuation;
+  // what THIS copy is plausibly worth as-is, best source first
+  const asIs =
+    v?.conditionAdjusted?.value ??
+    v?.tcgplayer?.market ??
+    v?.cardmarket?.trend ??
+    v?.webEstimate?.value ??
+    null;
+  // and what it becomes in a slab, at the grade we actually expect
+  const likely = scan.recommendation?.likelyGrade ?? null;
+  const likelyValue =
+    scan.recommendation?.rows?.find((r) => r.grade === likely)?.value ?? null;
+  // an already-slabbed card's value IS its graded value — raw prices are the
+  // wrong number for it, and conditionAdjusted is deliberately nulled upstream
+  const slabNum = scan.slab ? Number(scan.slab.gradeText.match(/(\d+(?:\.\d)?)\s*$/)?.[1]) : NaN;
+  const slabValue =
+    scan.slab && v?.graded && Number.isFinite(slabNum)
+      ? (slabNum >= 9.5 ? v.graded.psa10 : slabNum >= 9 ? v.graded.psa9 : v.graded.psa8) ?? null
+      : null;
+  // every price on this page is ours unless a feed verified it
+  const priceIsEstimate =
+    v?.conditionAdjusted != null || v?.webEstimate != null || (v?.graded?.estimated ?? false);
   if (!g) return null;
   const critNote = (key: "centering" | "corners" | "edges") => {
     if (g.subgrades[key]) return undefined;
@@ -494,6 +523,42 @@ function GradePanel({ scan }: { scan: Scan }) {
             {g.overall.toFixed(1)}
           </div>
         </div>
+        {(slabValue ?? asIs) != null && (
+          <div className="gc-value">
+            <div className="label-mono">ESTIMATED VALUE</div>
+            <div className="gc-price">
+              <Money v={slabValue ?? asIs} aud={aud} />
+            </div>
+            <div className="muted small">
+              {slabValue != null
+                ? `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
+                : v?.conditionAdjusted
+                  ? `this copy, raw, at grade ${g.overall.toFixed(1)}`
+                  : "near-mint market price"}
+              {slabValue != null && asIs != null && (
+                <>
+                  {" · "}
+                  <b style={{ color: "var(--text)" }}>${asIs.toFixed(2)}</b> raw
+                </>
+              )}
+              {slabValue == null && likelyValue != null && likely && (
+                <>
+                  {" · "}
+                  <b style={{ color: "var(--text)" }}>
+                    {likely} ${likelyValue.toFixed(2)}
+                  </b>{" "}
+                  if graded
+                </>
+              )}
+            </div>
+            {priceIsEstimate && (
+              <div className="gc-price-note">
+                <span className="badge warn">estimated</span>
+                <span>from system data — not a pricing API</span>
+              </div>
+            )}
+          </div>
+        )}
         <div className="verdict-side">
           <p className="muted" style={{ margin: 0 }}>
             Honest band <b style={{ color: "var(--text)" }}>{g.band.low.toFixed(1)} – {g.band.high.toFixed(1)}</b>.
@@ -784,6 +849,37 @@ function EbayComps({ scan }: { scan: Scan }) {
   );
 }
 
+/** Any price we produced ourselves says so, in plain words, right next to the
+ *  number — never a bare figure the user could mistake for a market feed. */
+function EstimateNote({ source }: { source: string }) {
+  const text =
+    source === "web-search"
+      ? "Estimated from system data — read off public web pages by our own lookup, not a pricing API. Each figure was re-checked against the page it came from; confirm via the sources before acting."
+      : source === "cardgrader"
+        ? "Estimated from system data — a third-party model's comps, not a pricing API. Confirm with the eBay sold links before acting."
+        : "Estimated from system data — our own multiples off the raw price, not a pricing API. Treat it as a ballpark and confirm with the eBay sold links below.";
+  return (
+    <div className="est-note">
+      <span className="badge warn">estimated</span>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function Sources({ items }: { items?: { label: string; url: string }[] | null }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="est-sources small">
+      <span className="muted small">sources: </span>
+      {items.map((c) => (
+        <a key={c.url} href={c.url} target="_blank" rel="noreferrer">
+          {c.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function ValuationPanel({ scan }: { scan: Scan }) {
   const v = scan.valuation;
   const aud = useAud();
@@ -819,6 +915,23 @@ function ValuationPanel({ scan }: { scan: Scan }) {
           </div>
         </>
       )}
+      {v.webEstimate && (
+        <div className="price-row">
+          <span>
+            Raw, read from web sources{" "}
+            <span className="muted small">
+              ({v.webEstimate.sampleSize} verified {v.webEstimate.sampleSize === 1 ? "figure" : "figures"})
+            </span>
+          </span>
+          <span className="v"><Money v={v.webEstimate.value} aud={aud} /></span>
+        </div>
+      )}
+      {v.webEstimate && !v.graded && (
+        <>
+          <EstimateNote source="web-search" />
+          <Sources items={v.webEstimate.citations} />
+        </>
+      )}
       {v.conditionAdjusted && (
         <div className="price-row" style={{ background: "rgba(77,163,255,0.06)" }}>
           <span>
@@ -838,7 +951,9 @@ function ValuationPanel({ scan }: { scan: Scan }) {
               {v.graded.estimated
                 ? v.graded.source === "cardgrader"
                   ? "(third-party estimate — CardGrader comps)"
-                  : "(ESTIMATED from raw price multiples — no verified sales found; confirm via eBay links)"
+                  : v.graded.source === "web-search"
+                    ? "(read from public web pages, verified against source)"
+                    : "(estimated from raw price multiples)"
                 : "(eBay sales medians)"}
             </span>
           </div>
@@ -854,6 +969,8 @@ function ValuationPanel({ scan }: { scan: Scan }) {
                 </div>
               ),
           )}
+          {v.graded.estimated && <EstimateNote source={v.graded.source} />}
+          <Sources items={v.graded.citations} />
         </>
       )}
       {scan.slab && (

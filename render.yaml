@@ -1,0 +1,55 @@
+# Render Blueprint — brings up the two backend services in one go.
+#   Render dashboard → New → Blueprint → pick this repo.
+#
+# The web app is NOT here: it goes to Vercel (Next.js is native there).
+#
+# Free tier reality: 512MB RAM / 0.1 CPU, and instances spin down after 15
+# minutes idle (~1 min to wake). The vision container is the memory-hungry one
+# — if it OOMs on free, move it to a Hugging Face Docker Space (2 vCPU / 16GB,
+# also free) using the SAME services/vision/Dockerfile and point VISION_URL at it.
+services:
+  # ── Python CV service ────────────────────────────────────────────────────
+  - type: web
+    name: grailcard-vision
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./services/vision/Dockerfile
+    dockerContext: ./services/vision
+    healthCheckPath: /health
+    envVars:
+      # Render injects PORT; the Dockerfile CMD reads it.
+      - key: OMP_NUM_THREADS
+        value: "1" # 0.1 CPU — extra OpenCV threads only cause contention
+
+  # ── NestJS API ───────────────────────────────────────────────────────────
+  - type: web
+    name: grailcard-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start --workspace apps/api
+    healthCheckPath: /scans
+    envVars:
+      - key: NODE_VERSION
+        value: "24" # db.ts uses node:sqlite, which needs Node 22.5+
+      - key: VISION_URL
+        fromService:
+          type: web
+          name: grailcard-vision
+          property: host
+      # Secrets are NOT in this file. Add them in the Render dashboard, or
+      # mark sync:false and Render will prompt for each on first deploy.
+      - key: XIMILAR_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JUSTTCG_API_KEY
+        sync: false
+      - key: APITCG_API_KEY
+        sync: false
+      - key: PPT_API_KEY
+        sync: false
+      - key: CARDGRADER_API_KEY
+        sync: false

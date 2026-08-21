@@ -84,6 +84,12 @@ export const OcrReading = z.object({
       company: z.string(), // PSA | BGS | CGC | ...
       gradeText: z.string(), // "GEM MT 10"
       certNumber: z.string().nullish(),
+      // the label's own identification: year + set + collector number pins a
+      // graded card exactly, without fuzzy name matching
+      year: z.string().nullish(),
+      setLine: z.string().nullish(), // "EX DRAGON FRONTIERS"
+      cardNumber: z.string().nullish(), // "100"
+      name: z.string().nullish(), // "CHARIZARD GOLD STAR HOLO R"
     })
     .nullish(),
   texts: z.array(z.string()),
@@ -114,6 +120,9 @@ export const GradedPrices = z.object({
   psa10: z.number().nullish(),
   // true when these are model/multiplier estimates, NOT verified sales
   estimated: z.boolean().default(false),
+  // for source "web-search": the pages each figure was read from and
+  // re-verified against. Empty for API-sourced prices.
+  citations: z.array(z.object({ label: z.string(), url: z.string() })).nullish(),
 });
 export type GradedPrices = z.infer<typeof GradedPrices>;
 
@@ -125,6 +134,16 @@ export const Valuation = z.object({
   // what THIS copy is plausibly worth raw, not a near-mint copy
   conditionAdjusted: z
     .object({ value: z.number(), multiplier: z.number() })
+    .nullish(),
+  // last-resort raw price read off public web pages by the grounded LLM
+  // lookup. NOT a pricing API: our own reading of cited pages, every figure
+  // re-checked against the page it came from. Always shown as an estimate.
+  webEstimate: z
+    .object({
+      value: z.number(),
+      sampleSize: z.number(),
+      citations: z.array(z.object({ label: z.string(), url: z.string() })),
+    })
     .nullish(),
   tcgplayer: z
     .object({

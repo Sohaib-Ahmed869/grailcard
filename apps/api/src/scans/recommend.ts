@@ -29,6 +29,7 @@ export function buildRecommendation(
     valuation?.conditionAdjusted?.value ??
     valuation?.tcgplayer?.market ??
     valuation?.cardmarket?.trend ??
+    valuation?.webEstimate?.value ??
     null;
   const graded = valuation?.graded ?? null;
   const likely = bucketOf(grade.overall);
@@ -76,9 +77,11 @@ export function buildRecommendation(
   const verdict = upsideOk && downsideOk ? "grade" : "dont_grade";
 
   const fmt = (n: number | null | undefined) => (n == null ? "?" : `$${n.toFixed(2)}`);
-  const estNote = graded.estimated
-    ? " Note: graded values here are ESTIMATES (no verified sales found) — confirm with the eBay sold links before paying for grading."
-    : "";
+  const estNote = !graded.estimated
+    ? ""
+    : graded.source === "web-search"
+      ? " Note: graded values here were read off public web pages by our own lookup, not a pricing API — each figure was re-checked against the page it came from, but confirm via the sources before paying for grading."
+      : " Note: graded values here are ESTIMATES (no verified sales found) — confirm with the eBay sold links before paying for grading.";
   const reasoning =
     (verdict === "grade"
       ? `Estimated grade band ${grade.band.low.toFixed(1)}–${grade.band.high.toFixed(1)} makes ${likely} the likely outcome. ` +

@@ -18,3 +18,6 @@ services/vision/tests/output/
 .env
 .env.local
 .DS_Store
+
+# standalone python runtime fetched for local dev (macOS); never commit
+.toolchain/

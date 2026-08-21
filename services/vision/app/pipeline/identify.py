@@ -30,6 +30,28 @@ _SLAB_GRADE = re.compile(
 _CERT_RE = re.compile(r"\b(\d{7,10})\b")  # PSA 8-9 digits, BGS up to 10
 
 
+_YEAR_RE = re.compile(r"\b(19[6-9]\d|20[0-4]\d)\b")
+_LABEL_NUM_RE = re.compile(r"#\s*([A-Z]{0,3}\d{1,3})\b")
+# grading-company furniture that is never part of the card or set name
+_LABEL_NOISE = re.compile(
+    r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS|GEM|MINT|MT|NM|EX[-\s]?MT|PRISTINE|"
+    r"AUTHENTIC|GRADE|POP|CERT|EDITION|1ST|UNLIMITED|SHADOWLESS)\b",
+    re.IGNORECASE,
+)
+# OCR reads label caps badly: zero for O, one for I, five for S
+_OCR_CONFUSIONS = str.maketrans({"0": "O", "1": "I", "5": "S", "8": "B"})
+
+
+def _label_words(raw: str) -> str:
+    """Undo OCR digit/letter confusions inside all-caps label words and split
+    run-together tokens ("P0KEMONGAME" -> "POKEMON GAME")."""
+    out = raw.translate(_OCR_CONFUSIONS)
+    out = re.sub(r"[^A-Za-z\s'&.-]", " ", out)
+    for word in ("POKEMON", "GAME", "SET", "SERIES", "HOLO"):
+        out = re.sub(f"(?<=[A-Z]){word}", f" {word}", out)
+    return re.sub(r"\s{2,}", " ", out).strip(" -.")
+
+
 def parse_slab(texts: list) -> dict | None:
     """Detect a grading-company slab label from OCR'd text near the top of
     the image (company name + condition wording + cert number)."""
@@ -63,10 +85,66 @@ def parse_slab(texts: list) -> dict | None:
         # company logo often doesn't OCR — cert length is a strong tell:
         # BGS certs run to 10 digits, PSA are 8-9
         raw_company = "BGS" if cert and len(cert.group(1)) == 10 else "PSA"
+    # The label is the answer key: year + set + collector number identify a
+    # graded card exactly, with no fuzzy name matching needed. Harvesting it
+    # is the difference between "Charizard, some set" and one specific card.
+    def _clean_label(raw: str) -> str:
+        out = _LABEL_NOISE.sub(" ", _label_words(_YEAR_RE.sub(" ", raw)))
+        return re.sub(r"\s{2,}", " ", out).strip(" -.")
+
+    year = None
+    set_line = None
+    label_number = None
+    for idx, t in enumerate(top_texts):
+        raw = t["text"].strip()
+        m = _YEAR_RE.search(raw)
+        if m and year is None:
+            year = m.group(1)
+            rest = _clean_label(raw)
+            if len(rest) >= 3:
+                set_line = rest
+            else:
+                # PSA prints "1999 POKEMON GAME" as one line, BGS splits the
+                # year onto its own — look ahead for the set on the next lines
+                for nxt in top_texts[idx + 1 : idx + 3]:
+                    txt = nxt["text"].strip()
+                    if _LABEL_NUM_RE.search(txt) or _CERT_RE.fullmatch(txt.replace(" ", "")):
+                        continue
+                    cand = _clean_label(txt)
+                    if len(cand) >= 4 and sum(ch.isalpha() for ch in cand) >= 4:
+                        set_line = cand
+                        break
+        n = _LABEL_NUM_RE.search(raw)
+        if n and label_number is None:
+            label_number = n.group(1).lstrip("#").strip()
+
+    # the name line: most alphabetic label text that isn't the set line,
+    # the company, or condition wording
+    label_name = None
+    best_len = 0
+    for t in top_texts:
+        raw = t["text"].strip()
+        if _YEAR_RE.search(raw) or _CERT_RE.fullmatch(raw.replace(" ", "")):
+            continue
+        # drop the "#100" prefix first: _label_words would read its digits
+        # as letters ("100" -> "IOO") and glue them onto the name
+        without_num = _LABEL_NUM_RE.sub(" ", raw)
+        without_num = re.sub(r"^\s*\d{1,3}\b", " ", without_num)
+        cleaned = _LABEL_NOISE.sub(" ", _label_words(without_num))
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -.")
+        alpha = sum(ch.isalpha() for ch in cleaned)
+        if alpha >= 4 and alpha > best_len and cleaned.upper() != (set_line or "").upper():
+            best_len = alpha
+            label_name = cleaned
+
     return {
         "company": raw_company,
         "gradeText": grade_text,
         "certNumber": cert.group(1) if cert else None,
+        "year": year,
+        "setLine": set_line,
+        "cardNumber": label_number,
+        "name": label_name,
     }
 # tokens that are card stats, not part of the name
 _NAME_STOP = re.compile(r"\b(hp|ex|gx|v|vmax|vstar)\b\s*\d*$", re.IGNORECASE)

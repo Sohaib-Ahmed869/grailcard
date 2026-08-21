@@ -1,4 +1,5 @@
 import type { Identification, OcrReading, Valuation } from "@grailcard/shared";
+import { normaliseVisionUrl } from "./visionurl.js";
 
 const TCGDEX = process.env.TCGDEX_URL ?? "https://api.tcgdex.net/v2/en";
 const MIN_MATCH_SCORE = 0.6;
@@ -49,7 +50,7 @@ function querySeeds(ocr: OcrReading): string[] {
   return [...seeds].slice(0, 5);
 }
 
-const VISION_URL = process.env.VISION_URL ?? "http://localhost:8100";
+const VISION_URL = normaliseVisionUrl(process.env.VISION_URL);
 
 /** dHash the scanned card against candidate catalog images (vision service). */
 async function visualScores(
@@ -151,7 +152,19 @@ export async function identifyCard(
   // cap the score so the LLM arbitration downstream gets a look
   if (bestVisual == null) best.score = Math.min(best.score, 0.85);
 
-  const detail = (await fetchJson(`${TCGDEX}/cards/${best.card.id}`)) as {
+  return buildFromCardId(best.card.id, best.ocrName, Math.min(best.score, 1), best.card);
+}
+
+/** Fetch a catalog card by id and shape it into our identification +
+ *  valuation contract. Shared by the name-match path and the slab-label path. */
+async function buildFromCardId(
+  cardId: string,
+  ocrName: string,
+  matchScore: number,
+  brief?: TcgdexBrief,
+): Promise<{ identification: Identification; valuation: Valuation | null } | null> {
+  const detail = (await fetchJson(`${TCGDEX}/cards/${cardId}`)) as {
+    name?: string;
     set?: { id: string; name: string };
     rarity?: string;
     localId?: string | number;
@@ -168,18 +181,20 @@ export async function identifyCard(
     };
   } | null;
 
+  const name = brief?.name ?? detail?.name;
+  if (!name) return null;
   const identification: Identification = {
-    cardId: best.card.id,
-    name: best.card.name,
-    setId: detail?.set?.id ?? best.card.id.split("-")[0],
+    cardId,
+    name,
+    setId: detail?.set?.id ?? cardId.split("-")[0],
     setName: detail?.set?.name ?? "",
-    localId: String(detail?.localId ?? best.card.localId),
+    localId: String(detail?.localId ?? brief?.localId ?? ""),
     rarity: detail?.rarity ?? null,
-    imageUrl: (detail?.image ?? best.card.image)
-      ? `${detail?.image ?? best.card.image}/high.png`
+    imageUrl: (detail?.image ?? brief?.image)
+      ? `${detail?.image ?? brief?.image}/high.png`
       : null,
-    matchScore: Math.min(best.score, 1),
-    ocrName: best.ocrName,
+    matchScore,
+    ocrName,
     game: "pokemon",
   };
 
@@ -224,4 +239,139 @@ export async function identifyCard(
   }
 
   return { identification, valuation };
+}
+
+// ---------------------------------------------------------------------------
+// Slab-label identification
+//
+// A graded card ships with its own answer key: the label prints the year, the
+// set, and the collector number. Set + number resolves to exactly one card, so
+// this path skips name fuzzy-matching entirely — which is what previously let
+// "Charizard Star" (EX Dragon Frontiers #100, a four-figure card) match
+// "Charizard VSTAR" (Brilliant Stars #018, a $13 card).
+// ---------------------------------------------------------------------------
+
+type TcgdexSet = { id: string; name: string; cardCount?: { total?: number } };
+
+let setsCache: { at: number; sets: TcgdexSet[] } | null = null;
+const SETS_TTL_MS = 24 * 3600 * 1000;
+
+async function allSets(): Promise<TcgdexSet[]> {
+  if (setsCache && Date.now() - setsCache.at < SETS_TTL_MS) return setsCache.sets;
+  const list = (await fetchJson(`${TCGDEX}/sets`)) as TcgdexSet[] | null;
+  if (!list || list.length === 0) return setsCache?.sets ?? [];
+  setsCache = { at: Date.now(), sets: list };
+  return list;
+}
+
+// Grading companies name vintage sets their own way — PSA calls Base Set
+// "POKEMON GAME". Only the ones no amount of fuzzy matching will reach.
+const SET_ALIASES: Record<string, string> = {
+  "pokemon game": "Base Set",
+  game: "Base Set",
+  "base set shadowless": "Base Set",
+  "pokemon jungle": "Jungle",
+  "pokemon fossil": "Fossil",
+  "pokemon team rocket": "Team Rocket",
+  "pokemon base set 2": "Base Set 2",
+  "pokemon gym heroes": "Gym Heroes",
+  "pokemon gym challenge": "Gym Challenge",
+  "pokemon neo genesis": "Neo Genesis",
+  "pokemon neo discovery": "Neo Discovery",
+  "pokemon neo revelation": "Neo Revelation",
+  "pokemon neo destiny": "Neo Destiny",
+};
+
+/** Label set text -> the variants worth matching against catalog set names.
+ *  Grading labels prefix the game and the era ("POKEMON SWSH BRILLIANT
+ *  STARS"); the catalog names just the set ("Brilliant Stars"). */
+function setLineVariants(raw: string): string[] {
+  const base = raw.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s{2,}/g, " ").trim();
+  const out = new Set<string>([base]);
+  const alias = SET_ALIASES[base];
+  if (alias) out.add(alias.toLowerCase());
+  // peel leading era/game prefixes one at a time: "pokemon swsh brilliant
+  // stars" -> "swsh brilliant stars" -> "brilliant stars"
+  let cur = base;
+  for (let i = 0; i < 3; i++) {
+    const next = cur.replace(/^(pokemon|pkmn|tcg|swsh|sm|xy|bw|hgss|dp|ex|sv)\s+/, "");
+    if (next === cur) break;
+    cur = next;
+    out.add(cur);
+    if (SET_ALIASES[cur]) out.add(SET_ALIASES[cur].toLowerCase());
+  }
+  return [...out].filter((s) => s.length >= 3);
+}
+
+/** Identify a graded card from its slab label. Returns null unless the set is
+ *  confidently resolved AND the collector number exists in it — a wrong card
+ *  at four figures is far worse than no answer. */
+export async function identifyFromSlabLabel(label: {
+  setLine?: string | null;
+  cardNumber?: string | null;
+  year?: string | null;
+  name?: string | null;
+}): Promise<{ identification: Identification; valuation: Valuation | null } | null> {
+  // the set line is mandatory; the number is not — vintage PSA labels often
+  // print only "1999 POKEMON GAME / CHARIZARD-HOLO", no collector number
+  if (!label.setLine || (!label.cardNumber && !label.name)) return null;
+  const sets = await allSets();
+  if (sets.length === 0) return null;
+
+  const variants = setLineVariants(label.setLine);
+  let bestSet: TcgdexSet | null = null;
+  let bestScore = 0;
+  for (const set of sets) {
+    for (const v of variants) {
+      const s = similarity(v, set.name);
+      if (s > bestScore) {
+        bestScore = s;
+        bestSet = set;
+      }
+    }
+  }
+  if (!bestSet || bestScore < 0.72) return null;
+
+  const detail = (await fetchJson(`${TCGDEX}/sets/${bestSet.id}`)) as {
+    cards?: TcgdexBrief[];
+  } | null;
+  const cards = detail?.cards ?? [];
+  let card: TcgdexBrief | undefined;
+  if (label.cardNumber) {
+    const wanted = String(Number(String(label.cardNumber).split("/")[0]));
+    card = cards.find((c) => String(Number(String(c.localId).split("/")[0])) === wanted);
+  } else if (label.name) {
+    // no number on the label: the set still narrows the field from ~20,000
+    // cards to a few hundred, where a name match is trustworthy
+    let bestName = 0;
+    for (const c of cards) {
+      const sc = similarity(label.name, c.name);
+      if (sc > bestName) {
+        bestName = sc;
+        card = c;
+      }
+    }
+    if (bestName < 0.55) card = undefined;
+  }
+  if (!card) return null;
+
+  // the label named a card too — if it disagrees flatly with the catalog entry
+  // at this number, the set match was probably wrong. Refuse rather than guess.
+  if (label.name) {
+    const nameScore = similarity(label.name, card.name);
+    if (nameScore < 0.25) {
+      console.warn(
+        `[slab] ${bestSet.name} #${card.localId} is "${card.name}" but label reads "${label.name}" — rejecting`,
+      );
+      return null;
+    }
+  }
+
+  const built = await buildFromCardId(card.id, label.name ?? card.name, 0.97);
+  if (built) {
+    console.log(
+      `[slab] "${label.setLine}${label.cardNumber ? ` #${label.cardNumber}` : ""}" -> ${card.id} (${card.name}), set match ${bestScore.toFixed(2)}`,
+    );
+  }
+  return built;
 }

@@ -215,6 +215,49 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* Estimated value sits beside the grade — the two numbers people came for.
+   Never shown without the provenance line under it. */
+.gc-value {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 26px;
+  border-left: 1px solid var(--border);
+  align-self: stretch;
+  justify-content: center;
+}
+
+.gc-price {
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.gc-price .small { font-size: 13px; font-weight: 600; }
+
+.gc-price-note {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+@media (max-width: 620px) {
+  .gc-value {
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    width: 100%;
+  }
+  .gc-price { font-size: 42px; }
+}
+
 .verdict-side {
   flex: 1;
   min-width: 240px;
@@ -985,3 +1028,40 @@ button.primary:disabled {
 .ebay-link:hover { border-color: var(--accent-2); transform: translateY(-1px); }
 
 .dropzone { display: none; }
+
+/* ============ ESTIMATE DISCLAIMER ============ */
+/* Every self-produced price carries this. A number with no provenance is the
+   one thing this product must never show. */
+.est-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
+}
+
+.est-note .badge {
+  flex: none;
+  margin-right: 0;
+  align-self: flex-start;
+}
+
+.est-sources {
+  margin: 6px 0 2px;
+  line-height: 1.7;
+}
+
+.est-sources a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-right: 10px;
+}
+
+.est-sources a:hover { color: var(--accent); }

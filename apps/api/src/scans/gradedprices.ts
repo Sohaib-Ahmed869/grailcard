@@ -22,6 +22,12 @@ export type PptPrices = { graded: GradedPrices | null; rawUsd: number | null };
 const gradedCache = new Map<string, { at: number; v: PptPrices }>();
 const GRADED_CACHE_TTL = 12 * 3600 * 1000;
 
+// PPT's free tier is ~100 credits/day and an includeEbay search costs 20 —
+// about five graded lookups a day. Once exhausted, every further call is a
+// guaranteed 429, so stop paying the latency for them.
+let dailyLimitHitAt = 0;
+const COOLDOWN_MS = 2 * 3600 * 1000;
+
 /** Find a market-ish USD number anywhere in PPT's prices blob (its shape
  *  varies by card era/variant). */
 function findMarket(prices: unknown, depth = 0): number | null {
@@ -47,6 +53,8 @@ export async function fetchGradedPrices(
   const key = process.env.PPT_API_KEY;
   if (!key) return empty;
 
+  if (Date.now() - dailyLimitHitAt < COOLDOWN_MS) return empty;
+
   const cacheKey = `${cardName}|${localId ?? ""}|${setName ?? ""}`;
   const hit = gradedCache.get(cacheKey);
   if (hit && Date.now() - hit.at < GRADED_CACHE_TTL) return hit.v;
@@ -56,11 +64,33 @@ export async function fetchGradedPrices(
     const clean = (s: string) => s.replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
     const query = [clean(cardName), setName ? clean(setName) : null].filter(Boolean).join(" ");
     const url = `${PPT_URL}/cards?search=${encodeURIComponent(query)}&limit=10&includeEbay=true`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return empty; // 429s NOT cached — retried next scan
+    const call = () =>
+      fetch(url, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(12000),
+      });
+    let res = await call();
+    if (res.status === 429) {
+      const detail = (await res.text().catch(() => "")).slice(0, 300);
+      // Two very different 429s hide behind one status code. A DAILY credit
+      // exhaustion ("requires 20 credits, you have 4 remaining") will never
+      // clear by waiting a few seconds — retrying just burns scan latency, so
+      // trip a breaker and stop calling until the quota resets. A burst limit
+      // does clear, and is worth one backoff.
+      if (/credit|quota|daily/i.test(detail)) {
+        dailyLimitHitAt = Date.now();
+        console.warn(
+          `[ppt] daily credit limit reached — graded prices disabled for ${COOLDOWN_MS / 3600000}h :: ${detail.replace(/\s+/g, " ")}`,
+        );
+        return empty;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+      res = await call();
+    }
+    if (!res.ok) {
+      console.warn(`[ppt] ${res.status} for "${query}" — graded prices unavailable this scan`);
+      return empty; // not cached — retried next scan
+    }
     const body = (await res.json()) as Record<string, unknown>;
     const items = (
       Array.isArray(body) ? body : (body.data ?? body.cards ?? body.results ?? [])
@@ -123,8 +153,9 @@ export async function fetchGradedPrices(
     };
     gradedCache.set(cacheKey, { at: Date.now(), v: result });
     return result;
-  } catch {
+  } catch (err) {
     // do NOT cache failures like 429s — retry on the next scan
+    console.warn(`[ppt] lookup failed for "${cardName}": ${(err as Error).message}`);
     return empty;
   }
 }

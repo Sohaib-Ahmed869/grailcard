@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { Scan, VisionAnalyzeResponse } from "@grailcard/shared";
 import { db } from "../db.js";
 import { identifyApiTcg } from "./apitcg.js";
+import { fetchWebPrices } from "./geminiprice.js";
+import { normaliseVisionUrl } from "./visionurl.js";
 import { estimateGradedFromRaw, fetchCardGraderMarket } from "./cardgrader.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
@@ -21,7 +23,7 @@ import { buildRecommendation, conditionMultiplier } from "./recommend.js";
 import { similarity } from "./similarity.js";
 import { fetchRelated } from "./related.js";
 import { buildSummary } from "./summarize.js";
-import { identifyCard } from "./tcgdex.js";
+import { identifyCard, identifyFromSlabLabel } from "./tcgdex.js";
 import { gradeWithXimilar } from "./ximilar.js";
 
 const BRAND_HINTS: [RegExp, string][] = [
@@ -39,7 +41,7 @@ function titleCase(s: string): string {
     .replace(/(^|[\s-])[a-z]/g, (m) => m.toUpperCase());
 }
 
-const VISION_URL = process.env.VISION_URL ?? "http://localhost:8100";
+const VISION_URL = normaliseVisionUrl(process.env.VISION_URL);
 const STORAGE_ROOT = join(process.cwd(), "storage");
 
 // PSA centering standards for the BACK are looser than the front
@@ -170,7 +172,24 @@ export class ScansService {
     if (frontRes.ocr) {
       scan.ocrNames = frontRes.ocr.nameCandidates ?? [];
       const names = scan.ocrNames.slice(0, 3);
-      const matches = (
+
+      // A graded slab carries its own answer key: the label prints the set and
+      // the collector number, which resolve to exactly one card. That beats
+      // fuzzy name matching outright — name matching is what let a $970
+      // "Charizard Star" resolve to a $13 "Charizard VSTAR".
+      if (frontRes.ocr.slab) {
+        const L = frontRes.ocr.slab;
+        console.log(
+          `[slab-label] ${L.company} ${L.gradeText} | year=${L.year ?? "-"} | set=${L.setLine ?? "-"} | num=${L.cardNumber ?? "-"} | name=${L.name ?? "-"}`,
+        );
+      }
+      const labelMatch = frontRes.ocr.slab
+        ? await identifyFromSlabLabel(frontRes.ocr.slab)
+        : null;
+
+      const matches = labelMatch
+        ? [labelMatch]
+        : (
         await Promise.all([
           identifyCard(frontRes.ocr, frontRes.warpedImageB64),
           identifyScryfall(names),
@@ -406,13 +425,44 @@ export class ScansService {
         scan.valuation.graded = backup;
       }
     }
-    const rawForEst = scan.valuation?.tcgplayer?.market ?? scan.valuation?.cardmarket?.trend;
+    // still nothing? read the open web: Gemini + Google Search reports prices
+    // off pages it actually retrieved, and every figure is re-checked against
+    // the page it cites before we keep it. Our own reading, not a price feed —
+    // so it lands as `estimated` with its sources attached.
+    if (
+      scan.identification &&
+      scan.identification.cardId !== "described" &&
+      !scan.valuation?.graded
+    ) {
+      const web = await fetchWebPrices(scan.identification);
+      if (web) {
+        scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
+        if (web.graded) {
+          scan.valuation.graded = { ...web.graded, citations: web.citations };
+        }
+        if (web.rawUsd != null && web.rawUsd > 0) {
+          scan.valuation.webEstimate = {
+            value: web.rawUsd,
+            sampleSize: web.sampleSize,
+            citations: web.citations,
+          };
+        }
+      }
+    }
+
+    const rawForEst =
+      scan.valuation?.tcgplayer?.market ??
+      scan.valuation?.cardmarket?.trend ??
+      scan.valuation?.webEstimate?.value;
     if (scan.valuation && !scan.valuation.graded && rawForEst != null && rawForEst > 0) {
       scan.valuation.graded = estimateGradedFromRaw(rawForEst);
     }
 
     // market prices are near-mint; adjust to THIS copy's estimated condition
-    const nmPrice = scan.valuation?.tcgplayer?.market ?? scan.valuation?.cardmarket?.trend;
+    const nmPrice =
+      scan.valuation?.tcgplayer?.market ??
+      scan.valuation?.cardmarket?.trend ??
+      scan.valuation?.webEstimate?.value;
     if (scan.valuation && scan.grade && nmPrice != null) {
       const multiplier = conditionMultiplier(scan.grade.overall);
       scan.valuation.conditionAdjusted = {
