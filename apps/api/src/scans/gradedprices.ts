@@ -1,5 +1,7 @@
 import type { GradedPrices } from "@grailcard/shared";
+import { db } from "../db.js";
 import { similarity } from "./similarity.js";
+import { recordUsage } from "./usage.js";
 
 // PokemonPriceTracker: free tier includes PSA prices (100 credits/day).
 // Set PPT_API_KEY (dashboard -> API) to activate; without a key this module
@@ -19,14 +21,153 @@ function num(v: unknown): number | null {
 
 export type PptPrices = { graded: GradedPrices | null; rawUsd: number | null };
 
-const gradedCache = new Map<string, { at: number; v: PptPrices }>();
-const GRADED_CACHE_TTL = 12 * 3600 * 1000;
+// PPT bills 2 credits PER CARD RETURNED, so the page size IS the price of a
+// lookup: limit=10 cost 20 credits and burned a whole day's quota in five
+// scans. The query is already set-qualified ("Charizard EX Dragon Frontiers"),
+// which puts the right card in the first couple of hits, so a small page is
+// both cheaper and no less accurate.
+const PAGE_SIZE = 3;
 
-// PPT's free tier is ~100 credits/day and an includeEbay search costs 20 —
-// about five graded lookups a day. Once exhausted, every further call is a
-// guaranteed 429, so stop paying the latency for them.
-let dailyLimitHitAt = 0;
-const COOLDOWN_MS = 2 * 3600 * 1000;
+// Cache TTLs. A hit is stable for a day; a miss is retried sooner, because a
+// miss is often our matching being wrong rather than the card being absent,
+// and we don't want to lock a card out for a full day over it.
+const HIT_TTL_MS = 24 * 3600 * 1000;
+const MISS_TTL_MS = 6 * 3600 * 1000;
+
+const readCache = db.prepare("SELECT fetched_at, payload FROM price_cache WHERE key = ?");
+const writeCache = db.prepare(
+  "INSERT INTO price_cache (key, fetched_at, payload) VALUES (?, ?, ?) " +
+    "ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at, payload = excluded.payload",
+);
+const readKv = db.prepare("SELECT value FROM kv WHERE key = ?");
+const writeKv = db.prepare(
+  "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+);
+
+const BREAKER_KEY = "ppt:quota_resets_at";
+const QUOTA_KEY = "ppt:quota";
+
+// 1 base + 1 eBay credit per card returned, so a lookup costs 2x the page size
+export const CREDITS_PER_LOOKUP = PAGE_SIZE * 2;
+
+export type QuotaStatus = {
+  provider: string;
+  /** null when we have never seen a response (no key, or no call yet) */
+  dailyLimit: number | null;
+  dailyRemaining: number | null;
+  purchasedRemaining: number | null;
+  totalRemaining: number | null;
+  /** ISO time the daily allowance refills */
+  resetsAt: string | null;
+  creditsPerLookup: number;
+  /** whole price lookups still affordable */
+  lookupsLeft: number | null;
+  lockedOut: boolean;
+  /** cards already priced and cached — these cost nothing to serve */
+  cachedCards: number;
+  /** when the numbers above were last observed */
+  observedAt: string | null;
+  configured: boolean;
+};
+
+/** PPT reports quota on every response, success or 429. Record it so the UI
+ *  can say "prices are missing because the budget is gone" instead of just
+ *  rendering a blank. */
+function recordQuota(res: Response): void {
+  const n = (h: string): number | null => {
+    const v = res.headers.get(h);
+    if (v == null) return null;
+    const parsed = Number(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const dailyLimit = n("x-ratelimit-daily-limit");
+  const dailyRemaining = n("x-ratelimit-daily-remaining");
+  if (dailyLimit == null && dailyRemaining == null) return; // not a PPT-shaped response
+  const resetUnix = n("x-ratelimit-daily-reset");
+  writeKvValue(
+    QUOTA_KEY,
+    JSON.stringify({
+      dailyLimit,
+      dailyRemaining,
+      purchasedRemaining: n("x-ratelimit-purchased-remaining"),
+      totalRemaining: n("x-ratelimit-total-remaining"),
+      resetsAt: resetUnix != null ? new Date(resetUnix * 1000).toISOString() : null,
+      observedAt: new Date().toISOString(),
+    }),
+  );
+}
+
+const countCached = db.prepare("SELECT COUNT(*) AS c FROM price_cache");
+
+export function quotaStatus(): QuotaStatus {
+  const configured = Boolean(process.env.PPT_API_KEY);
+  const row = readKv.get(QUOTA_KEY) as { value: string } | undefined;
+  const cachedCards = (countCached.get() as { c: number }).c;
+  let snap: Record<string, any> = {};
+  try {
+    snap = row ? JSON.parse(row.value) : {};
+  } catch {
+    snap = {};
+  }
+  const totalRemaining =
+    typeof snap.totalRemaining === "number"
+      ? snap.totalRemaining
+      : typeof snap.dailyRemaining === "number"
+        ? snap.dailyRemaining
+        : null;
+  return {
+    provider: "pokemonpricetracker",
+    dailyLimit: snap.dailyLimit ?? null,
+    dailyRemaining: snap.dailyRemaining ?? null,
+    purchasedRemaining: snap.purchasedRemaining ?? null,
+    totalRemaining,
+    resetsAt: snap.resetsAt ?? null,
+    creditsPerLookup: CREDITS_PER_LOOKUP,
+    lookupsLeft:
+      totalRemaining == null ? null : Math.floor(totalRemaining / CREDITS_PER_LOOKUP),
+    lockedOut: quotaLockRemaining() > 0,
+    cachedCards,
+    observedAt: snap.observedAt ?? null,
+    configured,
+  };
+}
+
+function cacheGet(key: string): PptPrices | null {
+  const row = readCache.get(key) as { fetched_at: number; payload: string } | undefined;
+  if (!row) return null;
+  let v: PptPrices;
+  try {
+    v = JSON.parse(row.payload) as PptPrices;
+  } catch {
+    return null;
+  }
+  const isMiss = v.graded == null && v.rawUsd == null;
+  const ttl = isMiss ? MISS_TTL_MS : HIT_TTL_MS;
+  if (Date.now() - row.fetched_at > ttl) return null;
+  return v;
+}
+
+function cacheSet(key: string, v: PptPrices): void {
+  writeCache.run(key, Date.now(), JSON.stringify(v));
+}
+
+/** ms until PPT's quota resets, or 0 if we are not locked out. Persisted so a
+ *  restart does not send us straight back into a 429. */
+function quotaLockRemaining(): number {
+  const row = readKv.get(BREAKER_KEY) as { value: string } | undefined;
+  if (!row) return 0;
+  const until = Number(row.value);
+  if (!Number.isFinite(until)) return 0;
+  return Math.max(0, until - Date.now());
+}
+
+function setQuotaLock(untilMs: number): void {
+  writeKv.run(BREAKER_KEY, String(untilMs));
+}
+
+function writeKvValue(key: string, value: string): void {
+  writeKv.run(key, value);
+}
 
 /** Find a market-ish USD number anywhere in PPT's prices blob (its shape
  *  varies by card era/variant). */
@@ -53,23 +194,32 @@ export async function fetchGradedPrices(
   const key = process.env.PPT_API_KEY;
   if (!key) return empty;
 
-  if (Date.now() - dailyLimitHitAt < COOLDOWN_MS) return empty;
-
   const cacheKey = `${cardName}|${localId ?? ""}|${setName ?? ""}`;
-  const hit = gradedCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < GRADED_CACHE_TTL) return hit.v;
+  // cache first: a cached answer costs nothing and works while locked out
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+
+  const lockedFor = quotaLockRemaining();
+  if (lockedFor > 0) {
+    console.warn(
+      `[ppt] quota exhausted — skipping lookup for "${cardName}", resets in ${Math.ceil(lockedFor / 60000)}m`,
+    );
+    return empty;
+  }
 
   try {
     // strip symbols (star/delta glyphs) that break text search
     const clean = (s: string) => s.replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
     const query = [clean(cardName), setName ? clean(setName) : null].filter(Boolean).join(" ");
-    const url = `${PPT_URL}/cards?search=${encodeURIComponent(query)}&limit=10&includeEbay=true`;
+    const url = `${PPT_URL}/cards?search=${encodeURIComponent(query)}&limit=${PAGE_SIZE}&includeEbay=true`;
     const call = () =>
       fetch(url, {
         headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(12000),
       });
     let res = await call();
+    recordUsage("ppt", CREDITS_PER_LOOKUP);
+    recordQuota(res);
     if (res.status === 429) {
       const detail = (await res.text().catch(() => "")).slice(0, 300);
       // Two very different 429s hide behind one status code. A DAILY credit
@@ -78,14 +228,28 @@ export async function fetchGradedPrices(
       // trip a breaker and stop calling until the quota resets. A burst limit
       // does clear, and is worth one backoff.
       if (/credit|quota|daily/i.test(detail)) {
-        dailyLimitHitAt = Date.now();
+        // PPT states its own reset time — trust that over a guessed cooldown
+        let until = Date.now() + 2 * 3600 * 1000;
+        try {
+          const parsed = JSON.parse(detail) as { resetsAt?: string; retryAfter?: number };
+          if (parsed.resetsAt && !Number.isNaN(Date.parse(parsed.resetsAt))) {
+            until = Date.parse(parsed.resetsAt);
+          } else if (typeof parsed.retryAfter === "number") {
+            until = Date.now() + parsed.retryAfter * 1000;
+          }
+        } catch {
+          /* body wasn't JSON — keep the conservative default */
+        }
+        setQuotaLock(until);
         console.warn(
-          `[ppt] daily credit limit reached — graded prices disabled for ${COOLDOWN_MS / 3600000}h :: ${detail.replace(/\s+/g, " ")}`,
+          `[ppt] daily credit limit reached — graded prices disabled until ${new Date(until).toISOString()} :: ${detail.replace(/\s+/g, " ")}`,
         );
         return empty;
       }
       await new Promise((r) => setTimeout(r, 2000));
       res = await call();
+      recordUsage("ppt", CREDITS_PER_LOOKUP);
+      recordQuota(res);
     }
     if (!res.ok) {
       console.warn(`[ppt] ${res.status} for "${query}" — graded prices unavailable this scan`);
@@ -96,7 +260,7 @@ export async function fetchGradedPrices(
       Array.isArray(body) ? body : (body.data ?? body.cards ?? body.results ?? [])
     ) as Record<string, unknown>[];
     if (items.length === 0) {
-      gradedCache.set(cacheKey, { at: Date.now(), v: empty });
+      cacheSet(cacheKey, empty);
       return empty;
     }
 
@@ -121,7 +285,7 @@ export async function fetchGradedPrices(
       items.find(numberMatches) ??
       items.find(setMatches);
     if (!pick) {
-      gradedCache.set(cacheKey, { at: Date.now(), v: empty });
+      cacheSet(cacheKey, empty);
       return empty;
     }
 
@@ -133,7 +297,7 @@ export async function fetchGradedPrices(
     > | null;
     if (!ebayRoot) {
       const v: PptPrices = { graded: null, rawUsd };
-      gradedCache.set(cacheKey, { at: Date.now(), v });
+      cacheSet(cacheKey, v);
       return v;
     }
     // PPT nests per-grade sales under ebay.salesByGrade
@@ -151,7 +315,7 @@ export async function fetchGradedPrices(
         graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded,
       rawUsd,
     };
-    gradedCache.set(cacheKey, { at: Date.now(), v: result });
+    cacheSet(cacheKey, result);
     return result;
   } catch (err) {
     // do NOT cache failures like 429s — retry on the next scan

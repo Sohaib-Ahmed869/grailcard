@@ -6,6 +6,7 @@
 
 // primary + fallback: the free tier 503s under load, and the lite model
 // usually has spare capacity when flash doesn't
+import { recordUsage } from "./usage.js";
 const MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
 
 export type LlmIdentification = {
@@ -33,6 +34,7 @@ export async function identifyWithGemini(
   try {
     let text: string | undefined;
     for (const model of MODELS) {
+      recordUsage("gemini");
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {

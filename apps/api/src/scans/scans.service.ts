@@ -299,31 +299,6 @@ export class ScansService {
       if (match) {
         scan.identification = match.identification;
         scan.valuation = match.valuation;
-        if (match.identification.game === "pokemon") {
-          const ppt = await fetchGradedPrices(
-            match.identification.name,
-            match.identification.localId,
-            match.identification.setName,
-          );
-          if (ppt.graded) {
-            scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
-            scan.valuation.graded = ppt.graded;
-          }
-          // vintage sets often have NO price in the free catalogs — PPT's
-          // raw market price fills the gap from the same call
-          if (ppt.rawUsd != null && !scan.valuation?.tcgplayer?.market) {
-            scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
-            scan.valuation.source = "pokemonpricetracker";
-            scan.valuation.tcgplayer = {
-              unit: "USD",
-              variant: "market",
-              low: null,
-              mid: null,
-              high: null,
-              market: ppt.rawUsd,
-            };
-          }
-        }
       } else if (!scan.identification) {
         // catalogs failed — ask the vision LLM to NAME the card (identification
         // only, never condition or price). If it names a catalog-supported
@@ -391,6 +366,43 @@ export class ScansService {
           matchScore: 0,
           ocrName: names[0],
           game: "other",
+        };
+      }
+    }
+
+    // PPT graded + raw prices for the identification that actually survived.
+    //
+    // This runs ONCE here rather than inside a single identification branch.
+    // It used to live in the `if (match)` arm only, so a card identified via
+    // the vision-LLM fallback (catalogs return 0 matches on a cropped or
+    // glare-heavy photo, then the LLM names it and we re-verify against the
+    // catalog) reached the page with a correct card ID and no prices at all —
+    // the same Gold Star priced fine from its slab photo and blank from a
+    // hand-held one.
+    const ident = scan.identification;
+    if (
+      ident &&
+      ident.game === "pokemon" &&
+      ident.cardId !== "llm" &&
+      ident.cardId !== "described"
+    ) {
+      const ppt = await fetchGradedPrices(ident.name, ident.localId, ident.setName);
+      if (ppt.graded) {
+        scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
+        scan.valuation.graded = ppt.graded;
+      }
+      // vintage sets often have NO price in the free catalogs — PPT's raw
+      // market price fills the gap from the same call
+      if (ppt.rawUsd != null && !scan.valuation?.tcgplayer?.market) {
+        scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
+        scan.valuation.source = "pokemonpricetracker";
+        scan.valuation.tcgplayer = {
+          unit: "USD",
+          variant: "market",
+          low: null,
+          mid: null,
+          high: null,
+          market: ppt.rawUsd,
         };
       }
     }

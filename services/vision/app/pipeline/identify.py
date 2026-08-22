@@ -30,8 +30,13 @@ _SLAB_GRADE = re.compile(
 _CERT_RE = re.compile(r"\b(\d{7,10})\b")  # PSA 8-9 digits, BGS up to 10
 
 
-_YEAR_RE = re.compile(r"\b(19[6-9]\d|20[0-4]\d)\b")
-_LABEL_NUM_RE = re.compile(r"#\s*([A-Z]{0,3}\d{1,3})\b")
+# NB: \b would fail on "2006EXDRAGONFRONTIERS" — a digit followed by a
+# letter is not a word boundary. Slab OCR routinely loses the spaces, so
+# bound on digits only. This is what silently killed the whole label path.
+_YEAR_RE = re.compile(r"(?<!\d)(19[6-9]\d|20[0-4]\d)(?!\d)")
+_LABEL_NUM_RE = re.compile(r"#\s*([A-Z]{0,3}\d{1,3})(?!\d)")  # \b fails on "#100CHARIZARD"
+# same OCR space-loss, on the number line: "#100 CHARIZARD" -> "100CHARIZARD"
+_LEADING_NUM_RE = re.compile(r"^(\d{1,3})(?=[A-Za-z])")
 # grading-company furniture that is never part of the card or set name
 _LABEL_NOISE = re.compile(
     r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS|GEM|MINT|MT|NM|EX[-\s]?MT|PRISTINE|"
@@ -114,9 +119,26 @@ def parse_slab(texts: list) -> dict | None:
                     if len(cand) >= 4 and sum(ch.isalpha() for ch in cand) >= 4:
                         set_line = cand
                         break
-        n = _LABEL_NUM_RE.search(raw)
+        n = _LABEL_NUM_RE.search(raw) or _LEADING_NUM_RE.search(raw)
         if n and label_number is None:
             label_number = n.group(1).lstrip("#").strip()
+
+    # A year is a nice anchor but not a requirement: plenty of labels OCR
+    # without a readable one, and bailing then throws away the set — which
+    # drops the whole card to fuzzy name matching on the card face, where
+    # "Charizard Star δ" scores HIGHER against "Charizard VSTAR" (0.88) than
+    # against the real "Charizard ☆ δ" (0.80). Recover the set from the most
+    # set-looking label line instead.
+    if set_line is None:
+        for t in top_texts:
+            raw = t["text"].strip()
+            if _CERT_RE.fullmatch(raw.replace(" ", "")):
+                continue
+            cand = _clean_label(_LEADING_NUM_RE.sub(" ", raw))
+            # a set line is mostly letters and longer than a grade token
+            if len(cand) >= 6 and sum(ch.isalpha() for ch in cand) >= 6:
+                set_line = cand
+                break
 
     # the name line: most alphabetic label text that isn't the set line,
     # the company, or condition wording

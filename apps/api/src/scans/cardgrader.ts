@@ -1,4 +1,5 @@
 import type { GradedPrices } from "@grailcard/shared";
+import { recordUsage } from "./usage.js";
 
 // CardGrader.AI market module as a graded-price BACKUP (their comps come
 // from eBay sold data). Costs 1 credit (~$0.20) per call — used only when
@@ -21,6 +22,7 @@ export async function fetchCardGraderMarket(
     form.append("back", blob, "back.jpg"); // their API requires a back image
     form.append("modules", "market");
 
+    recordUsage("cardgrader");
     const submit = await fetch(`${BASE}/v1/scans`, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Idempotency-Key": idemKey },

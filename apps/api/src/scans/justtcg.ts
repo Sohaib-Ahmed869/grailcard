@@ -1,5 +1,6 @@
 import type { Valuation } from "@grailcard/shared";
 import { similarity } from "./similarity.js";
+import { recordUsage } from "./usage.js";
 
 // JustTCG: prices for 18 TCGs — fills gaps where the free catalog has no
 // prices (Digimon, Union Arena, Dragon Ball, ...). FREE tier: 1,000 req/mo.
@@ -21,6 +22,7 @@ const GAME_MAP: Record<string, string> = {
 
 async function search(key: string, q: string, gameSlug?: string): Promise<any[]> {
   const game = gameSlug ? `&game=${gameSlug}` : "";
+  recordUsage("justtcg");
   const res = await fetch(
     `https://api.justtcg.com/v1/cards?q=${encodeURIComponent(q)}${game}&limit=8`,
     { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(8000) },

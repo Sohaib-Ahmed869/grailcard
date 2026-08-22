@@ -294,7 +294,10 @@ function setLineVariants(raw: string): string[] {
   // stars" -> "swsh brilliant stars" -> "brilliant stars"
   let cur = base;
   for (let i = 0; i < 3; i++) {
-    const next = cur.replace(/^(pokemon|pkmn|tcg|swsh|sm|xy|bw|hgss|dp|ex|sv)\s+/, "");
+    // \s* not \s+: slab OCR routinely loses the spaces between label words
+    // ("2006 EX DRAGON FRONTIERS" -> "EXOGONFRONTIERS"), and without peeling
+    // the era prefix the set never clears the match threshold.
+    const next = cur.replace(/^(pokemon|pkmn|tcg|swsh|sm|xy|bw|hgss|dp|ex|sv)\s*/, "");
     if (next === cur) break;
     cur = next;
     out.add(cur);
@@ -355,15 +358,30 @@ export async function identifyFromSlabLabel(label: {
   }
   if (!card) return null;
 
-  // the label named a card too — if it disagrees flatly with the catalog entry
-  // at this number, the set match was probably wrong. Refuse rather than guess.
+  // the label named a card too — if it disagrees flatly with the catalog entry,
+  // the set match was probably wrong. Refuse rather than guess.
+  //
+  // But a collector number inside a confidently-matched set IS the answer key,
+  // and grading labels print the name in a condensed font that OCR shreds
+  // ("#100 CHARIZARD DS HOLO R" comes back as "#100CHAF" + "ARDDSHOLOR"). A
+  // garbled name fragment must not veto an exact number hit — doing so dropped
+  // a $58k Dragon Frontiers Gold Star back to fuzzy face-name matching, which
+  // scores "Charizard Star δ" HIGHER against "Charizard VSTAR" (0.88) than
+  // against the real card (0.80), and priced it at $15.
   if (label.name) {
     const nameScore = similarity(label.name, card.name);
     if (nameScore < 0.25) {
+      const numberMatched = Boolean(label.cardNumber);
+      if (!numberMatched || bestScore < 0.8) {
+        console.warn(
+          `[slab] ${bestSet.name} #${card.localId} is "${card.name}" but label reads "${label.name}" — rejecting`,
+        );
+        return null;
+      }
       console.warn(
-        `[slab] ${bestSet.name} #${card.localId} is "${card.name}" but label reads "${label.name}" — rejecting`,
+        `[slab] label name "${label.name}" is unreadable (${nameScore.toFixed(2)} vs "${card.name}"), ` +
+          `but set "${bestSet.name}" matched ${bestScore.toFixed(2)} and #${card.localId} is exact — trusting the number`,
       );
-      return null;
     }
   }
 

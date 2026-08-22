@@ -1,4 +1,5 @@
 import type { GradedPrices } from "@grailcard/shared";
+import { recordUsage } from "./usage.js";
 
 // Grounded web pricing: Gemini + Google Search reads public listing/sales
 // pages and reports the numbers it saw, WITH the URL it read them from.
@@ -144,6 +145,7 @@ async function askGemini(query: string): Promise<string | null> {
   if (!key) return null;
   for (const model of MODELS) {
     try {
+      recordUsage("gemini");
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {

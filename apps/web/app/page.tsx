@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8180";
 
@@ -125,6 +125,40 @@ type PulseCard = {
   spark: number[];
 };
 
+/** Both tickers are opt-in. The page should open on the card, not on scrolling
+ *  market noise — so each collapses to a quiet label until asked for, and the
+ *  choice is remembered. Data is only fetched once actually opened. */
+function useDisclosure(key: string) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setOpen(window.localStorage.getItem(key) === "1");
+    } catch {
+      /* private mode — default closed */
+    }
+  }, [key]);
+  const toggle = () =>
+    setOpen((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(key, next ? "1" : "0");
+      } catch {
+        /* non-fatal */
+      }
+      return next;
+    });
+  return [open, toggle] as const;
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg className={`tick-chev${open ? " open" : ""}`} width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4"
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function TickerItems({ cards }: { cards: PulseCard[] }) {
   return (
     <>
@@ -148,21 +182,34 @@ function TickerItems({ cards }: { cards: PulseCard[] }) {
 }
 
 function MarketTicker() {
+  const [open, toggle] = useDisclosure("gc.ticker.market");
   const [cards, setCards] = useState<PulseCard[]>([]);
   useEffect(() => {
+    if (!open || cards.length > 0) return;
     fetch(`${API}/market/pulse`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setCards)
       .catch(() => {});
-  }, []);
-  if (cards.length === 0) return <div className="hticker" />;
+  }, [open, cards.length]);
   return (
-    <div className="hticker">
-      <span className="label-mono accent-text">· MARKET</span>
-      <div className="hticker-clip">
-        <div className="hticker-track">
-          <TickerItems cards={cards} />
-          <TickerItems cards={cards} />
+    <div className={`hticker${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="tick-toggle"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls="market-ticker"
+        title={open ? "Hide market prices" : "Show market prices"}
+      >
+        <span className="label-mono accent-text">MARKET</span>
+        <Chevron open={open} />
+      </button>
+      <div id="market-ticker" className="reveal-x" aria-hidden={!open}>
+        <div className="hticker-clip">
+          <div className="hticker-track">
+            <TickerItems cards={cards} />
+            <TickerItems cards={cards} />
+          </div>
         </div>
       </div>
     </div>
@@ -194,24 +241,41 @@ function NewsLineItems({ items }: { items: NewsItem[] }) {
 }
 
 function NewsLine() {
+  const [open, toggle] = useDisclosure("gc.ticker.news");
   const [items, setItems] = useState<NewsItem[]>([]);
   useEffect(() => {
+    if (!open || items.length > 0) return;
     fetch(`${API}/market/news`)
       .then((r) => (r.ok ? r.json() : []))
       .then(setItems)
       .catch(() => {});
-  }, []);
-  if (items.length === 0) return null;
+  }, [open, items.length]);
   return (
-    <div className="newsline">
-      <span className="label-mono violet-text">HOBBY WIRE</span>
-      <div className="newsline-clip">
-        <div className="newsline-track">
-          <NewsLineItems items={items} />
-          <NewsLineItems items={items} />
+    <div className={`newsline${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="tick-toggle"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls="hobby-wire"
+        title={open ? "Hide hobby news" : "Show hobby news"}
+      >
+        <span className="label-mono violet-text">HOBBY WIRE</span>
+        <Chevron open={open} />
+      </button>
+      <div id="hobby-wire" className="reveal-y" aria-hidden={!open}>
+        <div className="newsline-inner">
+          <div className="newsline-clip">
+            <div className="newsline-track">
+              <NewsLineItems items={items} />
+              <NewsLineItems items={items} />
+            </div>
+          </div>
+          {items.length > 0 && (
+            <span className="label-mono muted">{items.length} stories</span>
+          )}
         </div>
       </div>
-      <span className="label-mono muted">{items.length} stories</span>
     </div>
   );
 }
@@ -306,35 +370,179 @@ const SCAN_STEPS = [
   "Fetching market prices…",
 ];
 
-let fxPromise: Promise<number> | null = null;
-function useAud(): number | null {
-  const [rate, setRate] = useState<number | null>(null);
+/* ============ CURRENCY ============ */
+// Feeds price in mixed units — TCGplayer/PPT/eBay in USD, Cardmarket in EUR.
+// Rates are quoted FROM USD, so EUR converts via USD rather than directly.
+
+type FxTable = { base: string; date: string; rates: Record<string, number> };
+
+const FX_FALLBACK: FxTable = {
+  base: "USD",
+  date: "",
+  rates: { USD: 1, AUD: 1.5, EUR: 0.92, GBP: 0.79, CAD: 1.37, NZD: 1.67, JPY: 157 },
+};
+
+// shown first in the picker — the markets this audience actually sells into
+const PRIMARY = ["AUD", "USD", "EUR", "GBP", "JPY", "CAD", "NZD"];
+
+const CURRENCY_NAMES: Record<string, string> = {
+  AUD: "Australian Dollar", USD: "US Dollar", EUR: "Euro", GBP: "British Pound",
+  JPY: "Japanese Yen", CAD: "Canadian Dollar", NZD: "New Zealand Dollar",
+  SGD: "Singapore Dollar", HKD: "Hong Kong Dollar", CHF: "Swiss Franc",
+  CNY: "Chinese Yuan", KRW: "South Korean Won", INR: "Indian Rupee",
+  BRL: "Brazilian Real", MXN: "Mexican Peso", ZAR: "South African Rand",
+  SEK: "Swedish Krona", NOK: "Norwegian Krone", DKK: "Danish Krone",
+  PLN: "Polish Zloty", CZK: "Czech Koruna", HUF: "Hungarian Forint",
+  RON: "Romanian Leu", TRY: "Turkish Lira", ILS: "Israeli Shekel",
+  THB: "Thai Baht", MYR: "Malaysian Ringgit", PHP: "Philippine Peso",
+  IDR: "Indonesian Rupiah", ISK: "Icelandic Krona",
+};
+
+type CurrencyCtx = {
+  code: string;
+  setCode: (c: string) => void;
+  fx: FxTable;
+  ready: boolean;
+};
+
+const CurrencyContext = createContext<CurrencyCtx>({
+  code: "AUD",
+  setCode: () => {},
+  fx: FX_FALLBACK,
+  ready: false,
+});
+
+let fxPromise: Promise<FxTable> | null = null;
+
+function CurrencyProvider({ children }: { children: React.ReactNode }) {
+  const [code, setCodeState] = useState("AUD");
+  const [fx, setFx] = useState<FxTable>(FX_FALLBACK);
+  const [ready, setReady] = useState(false);
+
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem("gc-currency");
+      if (saved && /^[A-Z]{3}$/.test(saved)) setCodeState(saved);
+    } catch {
+      /* private mode — stay on the default */
+    }
     fxPromise ??= fetch(`${API}/market/fx`)
-      .then((r) => (r.ok ? r.json() : { usdToAud: null }))
-      .then((b) => b.usdToAud ?? 1.5)
-      .catch(() => 1.5);
-    fxPromise.then(setRate);
+      .then((r) => (r.ok ? r.json() : FX_FALLBACK))
+      .then((b: FxTable) => (b?.rates?.USD ? b : FX_FALLBACK))
+      .catch(() => FX_FALLBACK);
+    fxPromise.then((t) => {
+      setFx(t);
+      setReady(true);
+    });
   }, []);
-  return rate;
+
+  const setCode = (c: string) => {
+    setCodeState(c);
+    try {
+      localStorage.setItem("gc-currency", c);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  return (
+    <CurrencyContext.Provider value={{ code, setCode, fx, ready }}>
+      {children}
+    </CurrencyContext.Provider>
+  );
 }
 
-function Money({ v, aud, unit = "USD" }: { v?: number | null; aud: number | null; unit?: string }) {
+function useCurrency() {
+  return useContext(CurrencyContext);
+}
+
+/** Convert into the display currency. `from` is the unit the feed quoted. */
+function convert(v: number, from: string, to: string, fx: FxTable): number | null {
+  if (from === to) return v;
+  const fromRate = from === "USD" ? 1 : fx.rates[from];
+  const toRate = to === "USD" ? 1 : fx.rates[to];
+  if (!fromRate || !toRate) return null;
+  return (v / fromRate) * toRate;
+}
+
+function formatMoney(v: number, code: string): string {
+  // whole units above 1000 — "A$58,723" reads better than "A$58,723.00"
+  const digits = Math.abs(v) >= 1000 ? 0 : 2;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: code,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(v);
+  } catch {
+    return `${code} ${v.toFixed(digits)}`;
+  }
+}
+
+/** A price in the user's chosen currency, with the source figure kept
+ *  visible underneath — converted numbers should never look like the
+ *  original sale. */
+function Money({
+  v,
+  unit = "USD",
+  showSource = true,
+}: {
+  v?: number | null;
+  unit?: string;
+  showSource?: boolean;
+}) {
+  const { code, fx } = useCurrency();
   if (v == null) return <>—</>;
-  const main = unit === "USD" ? `$${v.toFixed(2)}` : `€${v.toFixed(2)}`;
+  const converted = convert(v, unit, code, fx);
+  if (converted == null) return <>{formatMoney(v, unit)}</>;
   return (
     <>
-      {main}
-      {unit === "USD" && aud != null && (
-        <span className="muted small"> · A${(v * aud).toFixed(v * aud >= 100 ? 0 : 2)}</span>
+      {formatMoney(converted, code)}
+      {showSource && unit !== code && (
+        <span className="muted small"> · {formatMoney(v, unit)}</span>
       )}
     </>
   );
 }
 
-function money(v: number | null | undefined, unit: string) {
-  if (v == null) return "—";
-  return unit === "USD" ? `$${v.toFixed(2)}` : `€${v.toFixed(2)}`;
+/** Non-JSX variant for table cells and strings. */
+function useMoneyFmt() {
+  const { code, fx } = useCurrency();
+  return (v: number | null | undefined, unit = "USD") => {
+    if (v == null) return "—";
+    const c = convert(v, unit, code, fx);
+    return c == null ? formatMoney(v, unit) : formatMoney(c, code);
+  };
+}
+
+function CurrencyPicker() {
+  const { code, setCode, fx } = useCurrency();
+  const all = Object.keys(fx.rates).sort();
+  const rest = all.filter((c) => !PRIMARY.includes(c));
+  return (
+    <label className="fx-picker" title="Display currency">
+      <span className="sr-only">Display currency</span>
+      <select value={code} onChange={(e) => setCode(e.target.value)} aria-label="Display currency">
+        <optgroup label="Common">
+          {PRIMARY.filter((c) => all.includes(c)).map((c) => (
+            <option key={c} value={c}>
+              {c} · {CURRENCY_NAMES[c] ?? c}
+            </option>
+          ))}
+        </optgroup>
+        {rest.length > 0 && (
+          <optgroup label="All currencies">
+            {rest.map((c) => (
+              <option key={c} value={c}>
+                {c} · {CURRENCY_NAMES[c] ?? c}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+    </label>
+  );
 }
 
 function CaptureSlot({
@@ -478,29 +686,6 @@ function gradeColor(v: number) {
 
 function GradePanel({ scan }: { scan: Scan }) {
   const g = scan.grade;
-  const aud = useAud();
-  const v = scan.valuation;
-  // what THIS copy is plausibly worth as-is, best source first
-  const asIs =
-    v?.conditionAdjusted?.value ??
-    v?.tcgplayer?.market ??
-    v?.cardmarket?.trend ??
-    v?.webEstimate?.value ??
-    null;
-  // and what it becomes in a slab, at the grade we actually expect
-  const likely = scan.recommendation?.likelyGrade ?? null;
-  const likelyValue =
-    scan.recommendation?.rows?.find((r) => r.grade === likely)?.value ?? null;
-  // an already-slabbed card's value IS its graded value — raw prices are the
-  // wrong number for it, and conditionAdjusted is deliberately nulled upstream
-  const slabNum = scan.slab ? Number(scan.slab.gradeText.match(/(\d+(?:\.\d)?)\s*$/)?.[1]) : NaN;
-  const slabValue =
-    scan.slab && v?.graded && Number.isFinite(slabNum)
-      ? (slabNum >= 9.5 ? v.graded.psa10 : slabNum >= 9 ? v.graded.psa9 : v.graded.psa8) ?? null
-      : null;
-  // every price on this page is ours unless a feed verified it
-  const priceIsEstimate =
-    v?.conditionAdjusted != null || v?.webEstimate != null || (v?.graded?.estimated ?? false);
   if (!g) return null;
   const critNote = (key: "centering" | "corners" | "edges") => {
     if (g.subgrades[key]) return undefined;
@@ -523,42 +708,6 @@ function GradePanel({ scan }: { scan: Scan }) {
             {g.overall.toFixed(1)}
           </div>
         </div>
-        {(slabValue ?? asIs) != null && (
-          <div className="gc-value">
-            <div className="label-mono">ESTIMATED VALUE</div>
-            <div className="gc-price">
-              <Money v={slabValue ?? asIs} aud={aud} />
-            </div>
-            <div className="muted small">
-              {slabValue != null
-                ? `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
-                : v?.conditionAdjusted
-                  ? `this copy, raw, at grade ${g.overall.toFixed(1)}`
-                  : "near-mint market price"}
-              {slabValue != null && asIs != null && (
-                <>
-                  {" · "}
-                  <b style={{ color: "var(--text)" }}>${asIs.toFixed(2)}</b> raw
-                </>
-              )}
-              {slabValue == null && likelyValue != null && likely && (
-                <>
-                  {" · "}
-                  <b style={{ color: "var(--text)" }}>
-                    {likely} ${likelyValue.toFixed(2)}
-                  </b>{" "}
-                  if graded
-                </>
-              )}
-            </div>
-            {priceIsEstimate && (
-              <div className="gc-price-note">
-                <span className="badge warn">estimated</span>
-                <span>from system data — not a pricing API</span>
-              </div>
-            )}
-          </div>
-        )}
         <div className="verdict-side">
           <p className="muted" style={{ margin: 0 }}>
             Honest band <b style={{ color: "var(--text)" }}>{g.band.low.toFixed(1)} – {g.band.high.toFixed(1)}</b>.
@@ -722,7 +871,6 @@ function IdentityPanel({ scan }: { scan: Scan }) {
 
 function RecommendationPanel({ scan }: { scan: Scan }) {
   const r = scan.recommendation;
-  const aud = useAud();
   if (!r) return null;
   const verdictBadge =
     r.verdict === "grade" ? (
@@ -762,7 +910,7 @@ function RecommendationPanel({ scan }: { scan: Scan }) {
           {r.rows.map((row) => (
             <tr key={row.grade} className={row.inBand ? "in-band" : ""}>
               <td>{row.grade}</td>
-              <td><Money v={row.value} aud={aud} /></td>
+              <td><Money v={row.value} /></td>
               <td
                 style={{
                   color:
@@ -882,23 +1030,24 @@ function Sources({ items }: { items?: { label: string; url: string }[] | null })
 
 function ValuationPanel({ scan }: { scan: Scan }) {
   const v = scan.valuation;
-  const aud = useAud();
+  const fmt = useMoneyFmt();
+  const { code } = useCurrency();
   if (!v) return null;
   return (
     <div className="panel">
       <div className="muted" style={{ marginBottom: 6 }}>
-        Market value <span className="small">(raw / ungraded · USD, AUD approx)</span>
+        Market value <span className="small">(raw / ungraded · shown in {code})</span>
       </div>
       {v.tcgplayer && (
         <>
           <div className="price-row">
             <span>TCGplayer market ({v.tcgplayer.variant})</span>
-            <span className="v"><Money v={v.tcgplayer.market} aud={aud} /></span>
+            <span className="v"><Money v={v.tcgplayer.market} /></span>
           </div>
           <div className="price-row">
             <span>TCGplayer low – high</span>
             <span className="v">
-              {money(v.tcgplayer.low, v.tcgplayer.unit)} – {money(v.tcgplayer.high, v.tcgplayer.unit)}
+              {fmt(v.tcgplayer.low, v.tcgplayer.unit)} – {fmt(v.tcgplayer.high, v.tcgplayer.unit)}
             </span>
           </div>
         </>
@@ -907,11 +1056,11 @@ function ValuationPanel({ scan }: { scan: Scan }) {
         <>
           <div className="price-row">
             <span>Cardmarket trend</span>
-            <span className="v">{money(v.cardmarket.trend, v.cardmarket.unit)}</span>
+            <span className="v">{fmt(v.cardmarket.trend, v.cardmarket.unit)}</span>
           </div>
           <div className="price-row">
             <span>Cardmarket 30-day avg</span>
-            <span className="v">{money(v.cardmarket.avg30, v.cardmarket.unit)}</span>
+            <span className="v">{fmt(v.cardmarket.avg30, v.cardmarket.unit)}</span>
           </div>
         </>
       )}
@@ -923,7 +1072,7 @@ function ValuationPanel({ scan }: { scan: Scan }) {
               ({v.webEstimate.sampleSize} verified {v.webEstimate.sampleSize === 1 ? "figure" : "figures"})
             </span>
           </span>
-          <span className="v"><Money v={v.webEstimate.value} aud={aud} /></span>
+          <span className="v"><Money v={v.webEstimate.value} /></span>
         </div>
       )}
       {v.webEstimate && !v.graded && (
@@ -939,7 +1088,7 @@ function ValuationPanel({ scan }: { scan: Scan }) {
             <span className="muted small">(× {v.conditionAdjusted.multiplier} of NM)</span>
           </span>
           <span className="v" style={{ color: "var(--accent)" }}>
-            <Money v={v.conditionAdjusted.value} aud={aud} />
+            <Money v={v.conditionAdjusted.value} />
           </span>
         </div>
       )}
@@ -965,7 +1114,7 @@ function ValuationPanel({ scan }: { scan: Scan }) {
                     {label}
                     {v.graded!.estimated && <span className="muted small"> (est.)</span>}
                   </span>
-                  <span className="v"><Money v={price} aud={aud} /></span>
+                  <span className="v"><Money v={price} /></span>
                 </div>
               ),
           )}
@@ -997,10 +1146,419 @@ function ValuationPanel({ scan }: { scan: Scan }) {
   );
 }
 
+/* ============ PRICE BUDGET ============ */
+// Graded prices come from a metered provider with a daily credit budget. When
+// it runs dry, cards still identify but price as blank — which reads like a
+// broken scanner unless we say otherwise. This makes the budget visible.
+
+type Quota = {
+  provider: string;
+  dailyLimit: number | null;
+  dailyRemaining: number | null;
+  totalRemaining: number | null;
+  resetsAt: string | null;
+  creditsPerLookup: number;
+  lookupsLeft: number | null;
+  lockedOut: boolean;
+  cachedCards: number;
+  observedAt: string | null;
+  configured: boolean;
+  budget?: {
+    scansLeft: number | null;
+    scansPerDay: number | null;
+    limitedBy: string | null;
+    resetsAt: string | null;
+    cachedCards: number;
+    providers: {
+      id: string;
+      label: string;
+      role: string;
+      unit: string;
+      used: number | null;
+      limit: number | null;
+      remaining: number | null;
+      costPerScan: number;
+      scansLeft: number | null;
+      reported: boolean;
+      gating: boolean;
+      note?: string;
+      period: string;
+    }[];
+  };
+};
+
+function untilReset(iso: string | null): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "any moment";
+  const h = Math.floor(ms / 3600000);
+  const m = Math.round((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** Shared so the topbar chip and the in-result banner never disagree. */
+function useQuota(): { q: Quota | null; reload: () => void } {
+  const [q, setQ] = useState<Quota | null>(null);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/market/quota`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => alive && setQ(v))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [nonce]);
+  return { q, reload: () => setNonce((n) => n + 1) };
+}
+
+function QuotaChip({ q }: { q: Quota | null }) {
+  const [open, setOpen] = useState(false);
+  if (!q || !q.configured) return null;
+  const b = q.budget;
+  const left = b?.scansLeft ?? q.lookupsLeft;
+  const total = b?.scansPerDay ?? null;
+  const out = q.lockedOut || left === 0;
+  const low = left != null && left > 0 && left <= 3;
+  const tone = out ? "is-out" : low ? "is-low" : "is-ok";
+
+  return (
+    <div className="quota-wrap">
+      <button
+        type="button"
+        className={`quota-chip ${tone}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title="Price-lookup budget"
+      >
+        <span className="quota-dot" aria-hidden="true" />
+        {left == null
+          ? "budget ?"
+          : total != null
+            ? `${left} / ${total} scans`
+            : `${left} scan${left === 1 ? "" : "s"}`}
+        <Chevron open={open} />
+      </button>
+
+      {open && (
+        <div className="quota-pop" role="dialog" aria-label="Price lookup budget">
+          <div className="quota-pop-head">
+            <b>New-card scans left today</b>
+            {total != null && (
+              <span className="quota-big">
+                {left}
+                <span className="muted">/{total}</span>
+              </span>
+            )}
+          </div>
+
+          {total != null && total > 0 && (
+            <div className="quota-bar" aria-hidden="true">
+              <div
+                className={`quota-bar-fill ${tone}`}
+                style={{ width: `${Math.max(0, Math.min(100, ((left ?? 0) / total) * 100))}%` }}
+              />
+            </div>
+          )}
+
+          {b?.limitedBy && (
+            <p className="muted small quota-note" style={{ marginTop: 0 }}>
+              Capped by <b style={{ color: "var(--text)" }}>{b.limitedBy}</b> — a scan is
+              only as available as its tightest provider.
+            </p>
+          )}
+
+          <div className="quota-providers">
+            {(b?.providers ?? [])
+              .filter((p) => p.gating || p.used)
+              .map((p) => {
+                const pct =
+                  p.limit && p.limit > 0
+                    ? Math.max(0, Math.min(100, ((p.remaining ?? 0) / p.limit) * 100))
+                    : null;
+                const dry = p.scansLeft === 0;
+                return (
+                  <div className="quota-prov" key={p.id}>
+                    <div className="quota-prov-top">
+                      <span className={dry ? "down-text" : undefined}>
+                        <b>{p.label}</b>
+                        <span className="muted small"> · {p.role}</span>
+                      </span>
+                      <span className="v">
+                        {p.limit != null
+                          ? `${p.remaining ?? 0}/${p.limit}`
+                          : `${p.used ?? 0} used`}
+                      </span>
+                    </div>
+                    {pct != null && (
+                      <div className="quota-bar sm" aria-hidden="true">
+                        <div
+                          className={`quota-bar-fill ${dry ? "is-out" : pct <= 20 ? "is-low" : "is-ok"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                    <div className="quota-prov-sub muted small">
+                      {p.costPerScan} {p.unit}/scan
+                      {p.scansLeft != null && ` · ${p.scansLeft} scans`}
+                      {` · per ${p.period}`}
+                      {!p.reported && " · measured locally"}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+
+          <div className="quota-line">
+            <span>Cards already cached</span>
+            <span className="v">{q.cachedCards} · free</span>
+          </div>
+          {q.resetsAt && (
+            <div className="quota-line">
+              <span>Resets in</span>
+              <span className="v">{untilReset(q.resetsAt)}</span>
+            </div>
+          )}
+
+          <p className="muted small quota-note">
+            {out
+              ? "Budget spent. Cards still scan and identify, and anything already cached still prices — but a card we have not priced before will show no market value until the reset."
+              : "Only cards we have not priced before spend credits. Repeat scans are served from cache and cost nothing."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Shown inside the result when a blank price is explained by the budget,
+ *  so the empty state is never mistaken for a detection failure. */
+function QuotaBanner({ scan, q }: { scan: Scan; q: Quota | null }) {
+  if (!q || !q.configured) return null;
+  const out = q.lockedOut || (q.budget?.scansLeft ?? q.lookupsLeft) === 0;
+  if (!out) return null;
+  const hasPrice = Boolean(
+    scan.valuation?.graded ||
+      scan.valuation?.tcgplayer?.market ||
+      scan.valuation?.cardmarket?.trend ||
+      scan.valuation?.webEstimate,
+  );
+  if (hasPrice) return null; // priced from cache — nothing to apologise for
+  return (
+    <div className="quota-banner">
+      <span className="badge warn">price budget spent</span>
+      <span>
+        The card was identified correctly — the missing value is our price
+        provider&apos;s daily credit budget, not the scan.
+        {q.resetsAt ? ` Resets in ${untilReset(q.resetsAt)}.` : ""}
+      </span>
+    </div>
+  );
+}
+
+/* ============ PRICE HERO ============ */
+// Pricing is the reason people scan a card, so it leads the page and always
+// renders — including the "we found nothing" case, which is information too.
+// Everything here is derived once and reused by GradePanel below.
+
+type PriceView = {
+  headline: number | null;      // the number that answers "what is it worth"
+  headlineUnit: string;         // currency the headline is quoted in
+  headlineLabel: string;        // what that number represents
+  raw: number | null;           // ungraded market, for context
+  rawUnit: string;
+  grades: { label: string; value: number | null; isSlab: boolean }[];
+  verified: boolean;            // real sold comps vs our own estimate
+  source: string | null;
+};
+
+/** Numeric grade off a slab label ("NM-MT 8.5" -> 8.5, "GEM MT 10" -> 10). */
+function slabGradeNum(scan: Scan): number {
+  if (!scan.slab) return NaN;
+  return Number(scan.slab.gradeText.match(/(\d+(?:\.\d)?)\s*$/)?.[1]);
+}
+
+function priceView(scan: Scan): PriceView {
+  const v = scan.valuation;
+  const g = v?.graded ?? null;
+  const rawUnit =
+    v?.tcgplayer?.market != null
+      ? v.tcgplayer.unit || "USD"
+      : v?.cardmarket?.trend != null
+        ? v.cardmarket.unit || "EUR"
+        : "USD";
+  const raw =
+    v?.tcgplayer?.market ?? v?.cardmarket?.trend ?? v?.webEstimate?.value ?? null;
+
+  const n = slabGradeNum(scan);
+  // a slabbed card is worth its GRADED price — raw is the wrong number for it
+  const slabValue =
+    scan.slab && g && Number.isFinite(n)
+      ? (n >= 9.5 ? g.psa10 : n >= 9 ? g.psa9 : g.psa8) ?? null
+      : null;
+
+  const likely = scan.recommendation?.likelyGrade ?? null;
+  const likelyValue = likely
+    ? scan.recommendation?.rows?.find((r) => r.grade === likely)?.value ?? null
+    : null;
+
+  const headline =
+    slabValue ?? v?.conditionAdjusted?.value ?? raw ?? likelyValue ?? null;
+  // graded comps and conditionAdjusted are always USD; only `raw` can be EUR
+  const headlineUnit =
+    slabValue != null || v?.conditionAdjusted != null ? "USD" : headline === raw ? rawUnit : "USD";
+  const headlineLabel = slabValue
+    ? `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
+    : v?.conditionAdjusted
+      ? "this copy, raw, at our estimated grade"
+      : raw != null
+        ? "near-mint market price, ungraded"
+        : likelyValue != null
+          ? `if it grades ${likely}`
+          : "no market price found";
+
+  const grades = g
+    ? ([["PSA 10", g.psa10, 10], ["PSA 9", g.psa9, 9], ["PSA 8", g.psa8, 8]] as const).map(
+        ([label, value, tier]) => ({
+          label,
+          value: value ?? null,
+          // highlight the tier the slab actually sits in
+          isSlab:
+            Number.isFinite(n) &&
+            (tier === 10 ? n >= 9.5 : tier === 9 ? n >= 9 && n < 9.5 : n < 9),
+        }),
+      )
+    : [];
+
+  return {
+    headline,
+    headlineUnit,
+    headlineLabel,
+    raw,
+    rawUnit,
+    grades,
+    verified: Boolean(g && !g.estimated),
+    source: g?.source ?? (v?.tcgplayer ? "tcgplayer" : v?.cardmarket ? "cardmarket" : null),
+  };
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  pokemonpricetracker: "eBay sold comps · PokemonPriceTracker",
+  cardgrader: "CardGrader comps",
+  "web-search": "read from public web pages, verified against source",
+  estimate: "our own multiples off the raw price — not a pricing API",
+  tcgplayer: "TCGplayer market",
+  cardmarket: "Cardmarket trend",
+};
+
+function PriceHero({ scan }: { scan: Scan }) {
+  const pv = priceView(scan);
+  const { code } = useCurrency();
+  const { q: quota } = useQuota();
+  const id = scan.identification;
+  const hasAny = pv.headline != null || pv.grades.some((x) => x.value != null);
+
+  return (
+    <section className="price-hero" aria-label="Valuation">
+      <div className="ph-top">
+        <div className="ph-id">
+          {id?.imageUrl && <img className="ph-thumb" src={id.imageUrl} alt="" loading="lazy" />}
+          <div className="ph-id-text">
+            <div className="ph-name">{id?.name ?? "Unidentified card"}</div>
+            <div className="muted small">
+              {[id?.setName, id?.localId ? `#${id.localId}` : null, id?.rarity]
+                .filter(Boolean)
+                .join(" · ") || "no catalog match"}
+            </div>
+            {scan.slab && (
+              <span className="ph-slab-chip">
+                {scan.slab.company} {scan.slab.gradeText}
+                {scan.slab.certNumber ? ` · #${scan.slab.certNumber}` : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <CurrencyPicker />
+      </div>
+
+      {hasAny ? (
+        <>
+          <div className="ph-figure">
+            <div className="label-mono accent-text">ESTIMATED VALUE</div>
+            <div className="ph-price">
+              <Money v={pv.headline} unit={pv.headlineUnit} showSource={false} />
+            </div>
+            <div className="muted small ph-sub">
+              {pv.headlineLabel}
+              {pv.headline != null && (
+                <span className="ph-src-usd">
+                  {" · "}
+                  {formatMoney(pv.headline, pv.headlineUnit)} {pv.headlineUnit}
+                </span>
+              )}
+              {pv.raw != null && pv.headline !== pv.raw && (
+                <>
+                  {" · raw "}
+                  <b style={{ color: "var(--text)" }}>
+                    <Money v={pv.raw} unit={pv.rawUnit} showSource={false} />
+                  </b>
+                </>
+              )}
+            </div>
+            <div className="ph-prov">
+              <span className={`badge ${pv.verified ? "pass" : "warn"}`}>
+                {pv.verified ? "verified sales" : "estimated"}
+              </span>
+              <span className="muted small">
+                {pv.source ? SOURCE_LABEL[pv.source] ?? pv.source : "no pricing source"}
+              </span>
+            </div>
+          </div>
+
+          {pv.grades.some((x) => x.value != null) && (
+            <div className="ph-grades">
+              {pv.grades.map((row) => (
+                <div className={`ph-grade${row.isSlab ? " is-slab" : ""}`} key={row.label}>
+                  <div className="ph-grade-label">
+                    {row.label}
+                    {row.isSlab && <span className="ph-grade-you">this slab</span>}
+                  </div>
+                  <div className="ph-grade-value">
+                    <Money v={row.value} showSource={false} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="ph-empty">
+          <div className="label-mono accent-text">ESTIMATED VALUE</div>
+          <div className="ph-price ph-price-none">—</div>
+          <QuotaBanner scan={scan} q={quota} />
+          <p className="muted small" style={{ margin: 0 }}>
+            No market price for this exact card in any feed we reach. The eBay sold
+            links further down are the best pricing that exists for it right now.
+          </p>
+        </div>
+      )}
+
+      <div className="ph-foot muted small">
+        Prices sourced in USD{scan.valuation?.cardmarket ? " and EUR" : ""}, converted to{" "}
+        {code} at ECB reference rates.
+        {scan.valuation?.updatedAt &&
+          ` Feed updated ${new Date(scan.valuation.updatedAt).toLocaleDateString()}.`}
+      </div>
+    </section>
+  );
+}
+
 function Result({ scan }: { scan: Scan }) {
   const m = scan.measurement;
   return (
     <>
+      <PriceHero scan={scan} />
       {scan.slab && (
         <div className="panel" style={{ borderColor: "var(--green)" }}>
           <span className="badge pass" style={{ fontSize: 16, padding: "6px 16px" }}>
@@ -1086,7 +1644,7 @@ function Result({ scan }: { scan: Scan }) {
           </div>
         )
       )}
-      {scan.status === "rejected" && <ValuationPanel scan={scan} />}
+      {(scan.status === "rejected" || !m) && <ValuationPanel scan={scan} />}
       <EbayComps scan={scan} />
       {scan.related && scan.related.length > 0 && (
         <div className="panel">
@@ -1112,7 +1670,8 @@ function Result({ scan }: { scan: Scan }) {
   );
 }
 
-export default function Home() {
+function HomeInner() {
+  const { q: quota, reload: reloadQuota } = useQuota();
   const [front, setFront] = useState<File | null>(null);
   const [back, setBack] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1138,6 +1697,7 @@ export default function Home() {
       const res = await fetch(`${API}/scans`, { method: "POST", body: form });
       if (!res.ok) throw new Error(`API error ${res.status}`);
       setScan(await res.json());
+      reloadQuota();
     } catch (e) {
       setError(e instanceof Error ? e.message : "scan failed");
     } finally {
@@ -1150,7 +1710,11 @@ export default function Home() {
       <div className="topbar">
         <span className="wordmark">GRAILCARD</span>
         <MarketTicker />
-        <ThemeToggle />
+        <div className="topbar-tools">
+          <QuotaChip q={quota} />
+          <CurrencyPicker />
+          <ThemeToggle />
+        </div>
       </div>
       <div className="capture-head">
         <h1>Place the card. We do the measuring.</h1>
@@ -1179,5 +1743,13 @@ export default function Home() {
       {scan && <Result scan={scan} />}
       <NewsLine />
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <CurrencyProvider>
+      <HomeInner />
+    </CurrencyProvider>
   );
 }
