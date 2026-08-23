@@ -1,0 +1,15 @@
+# The build context is uploaded before anything runs. Without this, the local
+# virtualenv (327MB) and toolchain (73MB) ship to the builder on every build.
+.venv/
+.toolchain/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# fixtures and goldens are for local test runs, not the image
+tests/
+pytest.ini
+
+.git/
+.gitignore
+README.md
