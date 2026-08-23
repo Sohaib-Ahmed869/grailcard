@@ -1672,6 +1672,16 @@ function Result({ scan }: { scan: Scan }) {
 
 function HomeInner() {
   const { q: quota, reload: reloadQuota } = useQuota();
+
+  // The API sleeps when idle on its current hosting tier, and waking it takes
+  // around a minute. Without this, the first scan of the day looks like a hang:
+  // the user picks a photo, presses Scan, and waits with no idea why. Pinging a
+  // cheap endpoint the moment the page opens means the instance is usually
+  // awake by the time they have chosen a card. Fire-and-forget — a failed warm
+  // -up changes nothing.
+  useEffect(() => {
+    fetch(`${API}/market/fx`, { cache: "no-store" }).catch(() => {});
+  }, []);
   const [front, setFront] = useState<File | null>(null);
   const [back, setBack] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1727,7 +1737,12 @@ function HomeInner() {
         <CaptureSlot label="Front" required file={front} onPick={setFront} scanning={busy} />
         <CaptureSlot label="Back" file={back} onPick={setBack} scanning={busy} />
       </div>
-      <div className="scan-status">{busy ? SCAN_STEPS[step] : ""}</div>
+      <div className="scan-status">
+        {busy ? SCAN_STEPS[step] : ""}
+        {busy && step >= SCAN_STEPS.length - 1 && (
+          <span className="muted small"> · first scan after a quiet spell takes longer while the server wakes</span>
+        )}
+      </div>
       <div className="scan-actions" style={{ marginBottom: 24 }}>
         <button className="primary" disabled={!front || busy} onClick={runScan}>
           {busy ? "Scanning…" : "Scan card"}
