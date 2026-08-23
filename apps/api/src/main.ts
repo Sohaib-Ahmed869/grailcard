@@ -15,6 +15,7 @@ if (existsSync(envPath)) {
 }
 
 import { AppModule } from "./app.module.js";
+import { initStore, storeConfigured } from "./cards.store.js";
 
 const PORT = Number(process.env.PORT ?? 8180);
 
@@ -22,6 +23,10 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.enableCors();
   app.use("/storage", express.static(join(process.cwd(), "storage")));
+  // shared card store — best-effort, a scan still works without it
+  if (storeConfigured()) await initStore();
+  else console.log("[store] DATABASE_URL not set — using local cache only");
+
   await app.listen(PORT);
   console.log(`grailcard api listening on http://localhost:${PORT}`);
 }

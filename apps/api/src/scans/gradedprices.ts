@@ -1,5 +1,6 @@
 import type { GradedPrices } from "@grailcard/shared";
 import { db } from "../db.js";
+import { readCard, writeCard } from "../cards.store.js";
 import { similarity } from "./similarity.js";
 import { recordUsage } from "./usage.js";
 
@@ -185,6 +186,28 @@ function findMarket(prices: unknown, depth = 0): number | null {
   return null;
 }
 
+/** Everything the provider tells us about the card it matched, so the store
+ *  becomes a growing catalogue rather than just a price ledger. */
+function describe(
+  pick: Record<string, any>,
+  cacheKey: string,
+  cardName: string,
+  localId?: string | null,
+  setName?: string | null,
+) {
+  return {
+    cacheKey,
+    query: { name: cardName, number: localId, set: setName },
+    providerCardId: pick.id != null ? String(pick.id) : null,
+    cardName: typeof pick.name === "string" ? pick.name : null,
+    setName: typeof pick.setName === "string" ? pick.setName : null,
+    cardNumber: pick.cardNumber != null ? String(pick.cardNumber) : null,
+    rarity: typeof pick.rarity === "string" ? pick.rarity : null,
+    imageUrl:
+      pick.imageCdnUrl400 ?? pick.imageCdnUrl ?? pick.imageUrl ?? null,
+  };
+}
+
 export async function fetchGradedPrices(
   cardName: string,
   localId?: string | null,
@@ -195,10 +218,37 @@ export async function fetchGradedPrices(
   if (!key) return empty;
 
   const cacheKey = `${cardName}|${localId ?? ""}|${setName ?? ""}`;
-  // cache first: a cached answer costs nothing and works while locked out
+
+  // 1. local cache — same machine, same day. Free and instant.
   const hit = cacheGet(cacheKey);
   if (hit) return hit;
 
+  // 2. shared store — a card any instance has ever bought. Still free: the
+  //    provider bills per card returned, so anything already purchased must
+  //    never be purchased twice.
+  const stored = await readCard(cacheKey, HIT_TTL_MS, MISS_TTL_MS);
+  if (stored) {
+    const v: PptPrices = stored.isMiss
+      ? { graded: null, rawUsd: null }
+      : {
+          graded:
+            stored.psa8 == null && stored.psa9 == null && stored.psa10 == null
+              ? null
+              : {
+                  source: "pokemonpricetracker",
+                  psa8: stored.psa8,
+                  psa9: stored.psa9,
+                  psa10: stored.psa10,
+                  estimated: stored.estimated,
+                },
+          rawUsd: stored.rawUsd,
+        };
+    cacheSet(cacheKey, v); // warm the local layer so the next scan skips the round trip
+    console.log(`[store] hit for "${cardName}" — no credits spent`);
+    return v;
+  }
+
+  // 3. only now is it worth spending a credit
   const lockedFor = quotaLockRemaining();
   if (lockedFor > 0) {
     console.warn(
@@ -261,6 +311,11 @@ export async function fetchGradedPrices(
     ) as Record<string, unknown>[];
     if (items.length === 0) {
       cacheSet(cacheKey, empty);
+      void writeCard({
+        cacheKey,
+        query: { name: cardName, number: localId, set: setName },
+        isMiss: true,
+      });
       return empty;
     }
 
@@ -286,6 +341,12 @@ export async function fetchGradedPrices(
       items.find(setMatches);
     if (!pick) {
       cacheSet(cacheKey, empty);
+      void writeCard({
+        cacheKey,
+        query: { name: cardName, number: localId, set: setName },
+        isMiss: true,
+        payload: { candidates: items.length },
+      });
       return empty;
     }
 
@@ -298,6 +359,7 @@ export async function fetchGradedPrices(
     if (!ebayRoot) {
       const v: PptPrices = { graded: null, rawUsd };
       cacheSet(cacheKey, v);
+      void writeCard({ ...describe(pick, cacheKey, cardName, localId, setName), rawUsd });
       return v;
     }
     // PPT nests per-grade sales under ebay.salesByGrade
@@ -316,6 +378,31 @@ export async function fetchGradedPrices(
       rawUsd,
     };
     cacheSet(cacheKey, result);
+    // keep everything the provider returned, not just the three numbers we
+    // render today — re-buying a card to get one extra field is the exact
+    // waste this store exists to prevent
+    const grades = ebay as Record<string, any>;
+    void writeCard({
+      ...describe(pick, cacheKey, cardName, localId, setName),
+      rawUsd,
+      psa8: graded.psa8,
+      psa9: graded.psa9,
+      psa10: graded.psa10,
+      counts: {
+        psa8: grades.psa8?.count ?? null,
+        psa9: grades.psa9?.count ?? null,
+        psa10: grades.psa10?.count ?? null,
+      },
+      spread: {
+        psa8: { min: grades.psa8?.minPrice ?? null, max: grades.psa8?.maxPrice ?? null },
+        psa9: { min: grades.psa9?.minPrice ?? null, max: grades.psa9?.maxPrice ?? null },
+        psa10: { min: grades.psa10?.minPrice ?? null, max: grades.psa10?.maxPrice ?? null },
+      },
+      lastSaleDate:
+        grades.psa10?.lastSaleDate ?? grades.psa9?.lastSaleDate ?? grades.psa8?.lastSaleDate ?? null,
+      estimated: false,
+      payload: pick,
+    });
     return result;
   } catch (err) {
     // do NOT cache failures like 429s — retry on the next scan

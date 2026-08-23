@@ -1,5 +1,6 @@
 import { quotaStatus, CREDITS_PER_LOOKUP } from "./gradedprices.js";
 import { monthStart, usedSince, usedToday } from "./usage.js";
+import { storeStats } from "../cards.store.js";
 
 // "How many more cards can this system actually scan today?"
 //
@@ -38,6 +39,8 @@ export type ScanBudget = {
   scansPerDay: number | null;
   /** which provider is the binding constraint right now */
   limitedBy: string | null;
+  /** cards already bought and stored — these never cost a credit again */
+  store: { configured: boolean; online: boolean; cards: number | null; withGraded: number | null };
   resetsAt: string | null;
   cachedCards: number;
   providers: ProviderBudget[];
@@ -59,7 +62,7 @@ function scansFrom(remaining: number | null, cost: number): number | null {
   return Math.max(0, Math.floor(remaining / cost));
 }
 
-export function scanBudget(): ScanBudget {
+export async function scanBudget(): Promise<ScanBudget> {
   const ppt = quotaStatus();
   const providers: ProviderBudget[] = [];
 
@@ -164,6 +167,7 @@ export function scanBudget(): ScanBudget {
     scansLeft,
     scansPerDay,
     limitedBy,
+    store: await storeStats(),
     resetsAt: ppt.resetsAt,
     cachedCards: ppt.cachedCards,
     providers,

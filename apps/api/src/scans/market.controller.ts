@@ -19,8 +19,8 @@ export class MarketController {
   // price-provider budget, so the UI can explain a missing price instead of
   // rendering a silent blank
   @Get("quota")
-  quota() {
-    return { ...quotaStatus(), budget: scanBudget() };
+  async quota() {
+    return { ...quotaStatus(), budget: await scanBudget() };
   }
 
   @Get("fx")

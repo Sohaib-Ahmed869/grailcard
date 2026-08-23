@@ -53,3 +53,22 @@ services:
         sync: false
       - key: CARDGRADER_API_KEY
         sync: false
+      # Shared card store (Neon). Prices bought once are reused by every
+      # instance, so a deploy no longer starts from an empty cache.
+      - key: DATABASE_URL
+        sync: false
+      # eBay. The deletion endpoint below is a COMPLIANCE requirement: eBay
+      # refuses to issue production OAuth tokens until it answers their
+      # challenge, which is why a production keyset shows "Non Compliant".
+      # EBAY_DELETION_ENDPOINT must match the URL saved in the eBay portal
+      # exactly — it is part of the challenge hash.
+      - key: EBAY_APP_ID
+        sync: false
+      - key: EBAY_DEV_ID
+        sync: false
+      - key: EBAY_CERT_ID
+        sync: false
+      - key: EBAY_VERIFICATION_TOKEN
+        sync: false
+      - key: EBAY_DELETION_ENDPOINT
+        value: https://grailcard-api.onrender.com/ebay/deletion
