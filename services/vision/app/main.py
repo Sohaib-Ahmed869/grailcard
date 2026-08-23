@@ -21,7 +21,13 @@ app = FastAPI(title="grailcard-vision", version="0.1.0")
 # centering is measured on a fixed 750x1050 canvas. Capping the longest side
 # costs no accuracy and cuts both peak memory and CPU time by the square of the
 # scale factor. Raise MAX_INPUT_PX on a larger instance.
-MAX_INPUT_PX = int(os.environ.get("MAX_INPUT_PX", "2000"))
+# DEFAULT OFF. Downscaling is a memory tactic for small containers, and it is
+# not free: shrinking a 2048px photo by even 2% lost the collector number off
+# the card face, and identification silently fell back to name matching — a
+# PSA 10 Umbreon VMAX #215 resolved to the ordinary #95, a ~40x pricing error.
+# Only enable it where memory genuinely forces the trade (render.yaml sets it),
+# and never below what the OCR needs to read a collector number.
+MAX_INPUT_PX = int(os.environ.get("MAX_INPUT_PX", "0"))
 
 
 def _fit_input(image: np.ndarray, label: str) -> np.ndarray:

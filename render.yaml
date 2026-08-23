@@ -21,6 +21,10 @@ services:
       # Render injects PORT; the Dockerfile CMD reads it.
       - key: OMP_NUM_THREADS
         value: "1" # 0.1 CPU — extra OpenCV threads only cause contention
+      # memory tactic for a small instance only — it costs OCR accuracy, so it
+      # is off by default and set explicitly here
+      - key: MAX_INPUT_PX
+        value: "2000"
 
   # ── NestJS API ───────────────────────────────────────────────────────────
   - type: web
