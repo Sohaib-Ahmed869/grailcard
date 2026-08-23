@@ -15,7 +15,7 @@ services:
     plan: free
     region: oregon
     dockerfilePath: ./services/vision/Dockerfile
-    dockerContext: ./services/vision
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       # Render injects PORT; the Dockerfile CMD reads it.

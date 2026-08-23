@@ -10,11 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# NOTE: paths are relative to the REPO ROOT, not services/vision. Hosted
+# builders default the context to the repo root and only expose the
+# Dockerfile path, so root-relative COPY is the portable choice.
 # deps first so the layer caches across code edits
-COPY requirements.txt .
+COPY services/vision/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY services/vision/app ./app
 
 # RapidOCR downloads its ONNX models on first use; warm them at BUILD time so
 # the first real scan isn't paying for the download on a cold container.
