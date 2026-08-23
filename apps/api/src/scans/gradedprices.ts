@@ -32,7 +32,12 @@ const PAGE_SIZE = 3;
 // Cache TTLs. A hit is stable for a day; a miss is retried sooner, because a
 // miss is often our matching being wrong rather than the card being absent,
 // and we don't want to lock a card out for a full day over it.
-const HIT_TTL_MS = 24 * 3600 * 1000;
+// A week, not a day. Graded card prices are medians over hundreds of
+// completed sales and barely move day to day, so a short TTL buys almost no
+// accuracy while guaranteeing that a card priced yesterday costs credits again
+// today — and that a provider outage or an exhausted quota blanks a card we
+// already have good data for. Long TTL keeps known cards answerable offline.
+const HIT_TTL_MS = 7 * 24 * 3600 * 1000;
 const MISS_TTL_MS = 6 * 3600 * 1000;
 
 const readCache = db.prepare("SELECT fetched_at, payload FROM price_cache WHERE key = ?");
