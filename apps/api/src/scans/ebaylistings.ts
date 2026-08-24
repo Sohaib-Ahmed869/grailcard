@@ -1,4 +1,5 @@
 import { recordUsage } from "./usage.js";
+import { comparePrinting, describePrinting, readPrinting, type Printing } from "./printing.js";
 
 // Live eBay listings for a card, shown in-product rather than as a link out.
 //
@@ -22,6 +23,10 @@ export type Listing = {
   /** grader + grade parsed out of the title, where present */
   grader: string | null;
   grade: number | null;
+  /** printing named in the title, e.g. "Manga Art · Alt Art · Japanese" */
+  printing: string | null;
+  /** how that printing compares to the card we scanned */
+  printingMatch: "match" | "conflict" | "unknown";
 };
 
 export type ListingResult = {
@@ -30,11 +35,21 @@ export type ListingResult = {
   query: string;
   /** true when we filtered to the card's own grader and grade */
   filteredToGrade: boolean;
+  /** listings that survived every filter, of which `listings` shows the first few */
+  matched: number;
   /** median asking price of what survived filtering — a figure, not just a list.
    *  Median rather than mean: one aspirational listing should not move it. */
   medianAsk: number | null;
   askLow: number | null;
   askHigh: number | null;
+  /** the printing these figures are for, where we could pin one down */
+  printing: string | null;
+  /** true when the listings were narrowed to that printing */
+  filteredToPrinting: boolean;
+  /** other printings of the same card number we saw and excluded, with the
+   *  asking range for each — the card number alone does not identify a product
+   *  and the interface should be able to say so */
+  otherPrintings: { name: string; count: number; low: number; high: number }[];
 };
 
 const cache = new Map<string, { at: number; v: ListingResult }>();
@@ -86,8 +101,18 @@ export async function fetchListings(opts: {
   grader?: string | null;
   grade?: number | null;
   limit?: number;
+  /** everything we know in words about THIS copy — slab label lines, the card's
+   *  own OCR, the vision model's printing call. Read for a printing, not
+   *  searched on: adding "manga" to the query would hide untitled listings. */
+  printingHint?: string | null;
+  /** true when the card carries Japanese text */
+  japanese?: boolean;
 }): Promise<ListingResult | null> {
-  const limit = Math.min(opts.limit ?? 12, 24);
+  const show = Math.min(opts.limit ?? 12, 24);
+  // Fetch wide, show narrow. Printing and grade filtering discard most of what
+  // comes back — on OP13-119 only 9 of 100 results are the printing we want —
+  // so asking for 12 and filtering leaves nothing to compute a median from.
+  const limit = 100;
   // strip glyphs that break eBay's text search the same way they break ours
   const clean = (s: string) => s.replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
   // The card NUMBER is the single most valuable token in the query. Without it
@@ -101,7 +126,9 @@ export async function fetchListings(opts: {
   if (opts.grader && opts.grade != null) parts.push(`${opts.grader} ${opts.grade}`);
   const query = parts.filter(Boolean).join(" ");
 
-  const key = `${query}|${limit}`;
+  const cardPrinting: Printing = readPrinting(opts.printingHint);
+  if (opts.japanese && !cardPrinting.language) cardPrinting.language = "ja";
+  const key = `${query}|${show}|${cardPrinting.family ?? ""}|${cardPrinting.language ?? ""}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.v;
 
@@ -125,9 +152,11 @@ export async function fetchListings(opts: {
     const items: any[] = body.itemSummaries ?? [];
 
     const listings: Listing[] = items.map((it) => {
-      const { grader, grade } = gradeFromTitle(String(it.title ?? ""));
+      const rawTitle = String(it.title ?? "");
+      const { grader, grade } = gradeFromTitle(rawTitle);
+      const p = readPrinting(rawTitle);
       return {
-        title: String(it.title ?? "").slice(0, 140),
+        title: rawTitle.slice(0, 140),
         price: it.price?.value != null ? Number(it.price.value) : null,
         currency: String(it.price?.currency ?? "USD"),
         condition: it.condition ?? null,
@@ -136,6 +165,8 @@ export async function fetchListings(opts: {
         seller: it.seller?.username ?? null,
         grader,
         grade,
+        printing: describePrinting(p),
+        printingMatch: comparePrinting(cardPrinting, p),
       };
     });
 
@@ -165,6 +196,37 @@ export async function fetchListings(opts: {
         filteredToGrade = true;
       }
     }
+    // Narrow to OUR printing. This is the difference between pricing a card and
+    // pricing a card number: the four printings of OP13-119 that share a number
+    // ask $82 and $8,200 for the same three digits.
+    //
+    // Only listings that positively declare our printing are kept, and only
+    // when enough of them exist to stand on their own. Silent listings are not
+    // evidence against us, but they are not evidence for us either, and a
+    // median built mostly on silence is the mixed figure we set out to remove.
+    let filteredToPrinting = false;
+    const otherPrintings: ListingResult["otherPrintings"] = [];
+    if (cardPrinting.family || cardPrinting.language) {
+      const matched = filtered.filter((l) => l.printingMatch === "match");
+      const conflicting = filtered.filter((l) => l.printingMatch === "conflict");
+      if (matched.length >= 3) {
+        // report what we set aside, so the interface can name the alternatives
+        const byName = new Map<string, number[]>();
+        for (const l of conflicting) {
+          if (l.price == null) continue;
+          const n = l.printing ?? "other printing";
+          byName.set(n, [...(byName.get(n) ?? []), l.price]);
+        }
+        for (const [name, ps] of byName) {
+          ps.sort((a, b) => a - b);
+          otherPrintings.push({ name, count: ps.length, low: ps[0], high: ps[ps.length - 1] });
+        }
+        otherPrintings.sort((a, b) => b.count - a.count);
+        filtered = matched;
+        filteredToPrinting = true;
+      }
+    }
+
     filtered.sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
 
     const priced = filtered.filter((l) => l.price != null && l.url);
@@ -177,13 +239,17 @@ export async function fetchListings(opts: {
           : (values[values.length / 2 - 1] + values[values.length / 2]) / 2;
 
     const v: ListingResult = {
-      listings: priced,
+      listings: priced.slice(0, show),
       total: Number(body.total ?? priced.length),
+      matched: priced.length,
       query,
       filteredToGrade,
       medianAsk: median,
       askLow: values[0] ?? null,
       askHigh: values[values.length - 1] ?? null,
+      printing: describePrinting(cardPrinting),
+      filteredToPrinting,
+      otherPrintings,
     };
     cache.set(key, { at: Date.now(), v });
     return v;

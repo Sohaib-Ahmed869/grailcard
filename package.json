@@ -11,6 +11,8 @@
     "dev:web": "npm run dev --workspace apps/web",
     "dev:vision": "node scripts/venv-python.mjs -m uvicorn app.main:app --app-dir services/vision --port 8100 --reload",
     "build": "npm run build --workspaces --if-present",
-    "test:vision": "node scripts/venv-python.mjs --cwd services/vision -m pytest tests -q"
+    "test:vision": "node scripts/venv-python.mjs --cwd services/vision -m pytest tests -q",
+    "test:api": "npm run test --workspace apps/api",
+    "test": "npm run test:api && npm run test:vision"
   }
 }

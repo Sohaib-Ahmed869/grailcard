@@ -138,6 +138,8 @@ type Scan = {
       total: number;
       grader: string;
       grade: number;
+      printing?: string | null;
+      otherPrintings?: { name: string; count: number; low: number; high: number }[];
     } | null;
   } | null;
 };
@@ -1414,6 +1416,8 @@ type PriceView = {
   ask: {
     median: number; low?: number | null; high?: number | null;
     count: number; grader: string; grade: number;
+    printing?: string | null;
+    otherPrintings?: { name: string; count: number; low: number; high: number }[];
   } | null;
   /** true when the headline figure is an asking price, not a completed sale */
   headlineIsAsk: boolean;
@@ -1727,7 +1731,9 @@ function PriceHero({ scan }: { scan: Scan }) {
           <div className="ph-figure">
             <div className="label-mono accent-text">
               {pv.headlineIsAsk
-                ? `CURRENT ASKING PRICE · ${pv.ask!.grader} ${pv.ask!.grade}`
+                ? `CURRENT ASKING PRICE · ${pv.ask!.grader} ${pv.ask!.grade}${
+                    pv.ask!.printing ? ` · ${pv.ask!.printing.toUpperCase()}` : ""
+                  }`
                 : `ESTIMATED VALUE${pv.crossGrader ? " · CROSS-GRADER ESTIMATE" : ""}`}
             </div>
             <div className="ph-price">
@@ -1759,17 +1765,48 @@ function PriceHero({ scan }: { scan: Scan }) {
                   {" – "}
                   <Money v={pv.ask!.high} unit="USD" showSource={false} />
                 </b>
-                {" — a wide spread usually means the listings cover more than one "}
-                {"printing of this card. Check the titles below against yours."}
               </div>
+            )}
+            {pv.headlineIsAsk && (pv.ask!.otherPrintings?.length ?? 0) > 0 && (
+              <details className="printing-note">
+                <summary>
+                  {pv.ask!.otherPrintings!.length} other printing
+                  {pv.ask!.otherPrintings!.length === 1 ? "" : "s"} of this card number
+                  {" — priced separately, not averaged in"}
+                </summary>
+                <ul>
+                  {pv.ask!.otherPrintings!.map((o) => (
+                    <li key={o.name}>
+                      <span>{o.name}</span>
+                      <span className="mono">
+                        <Money v={o.low} unit="USD" showSource={false} />
+                        {o.high !== o.low && (
+                          <>
+                            {" – "}
+                            <Money v={o.high} unit="USD" showSource={false} />
+                          </>
+                        )}
+                        <span className="muted"> · {o.count}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted">
+                  A card number is not a product. These carry the same number as yours
+                  but are different cards at different prices, so they are excluded from
+                  the figure above rather than averaged into it.
+                </p>
+              </details>
             )}
             <div className="ph-prov">
               {pv.headlineIsAsk ? (
                 <>
                   <span className="badge warn">asking prices</span>
                   <span className="muted small">
-                    We hold no completed sales for a {pv.ask!.grader} {pv.ask!.grade} of this
-                    card, so this is what sellers are asking today — not what one sold for.
+                    We hold no completed sales for a {pv.ask!.grader} {pv.ask!.grade}
+                    {pv.ask!.printing ? ` ${pv.ask!.printing}` : ""} of this card, so this
+                    is what sellers are asking today — not what one sold for. Sold prices
+                    usually land below the asks.
                   </span>
                 </>
               ) : (
@@ -1868,14 +1905,17 @@ type Listing = {
   title: string; price: number | null; currency: string; condition: string | null;
   imageUrl: string | null; url: string; seller: string | null;
   grader: string | null; grade: number | null;
+  printing: string | null;
+  printingMatch?: "match" | "conflict" | "unknown";
 };
 
 function LiveListings({ scan }: { scan: Scan }) {
   const id = scan.identification;
   const v = scan.valuation;
   const [data, setData] = useState<{
-    listings: Listing[]; total: number; filteredToGrade: boolean;
+    listings: Listing[]; total: number; matched?: number; filteredToGrade: boolean;
     medianAsk: number | null; askLow: number | null; askHigh: number | null;
+    printing?: string | null; filteredToPrinting?: boolean;
   } | null>(null);
   const [state, setState] = useState<"loading" | "done" | "error">("loading");
 
@@ -1886,13 +1926,18 @@ function LiveListings({ scan }: { scan: Scan }) {
     if (id.localId) q.set("number", id.localId);
     if (v?.slabGrader) q.set("grader", v.slabGrader);
     if (v?.slabGrade != null) q.set("grade", String(v.slabGrade));
+    // Narrow to the same printing the valuation used. Without this the panel
+    // and the figure above it disagree, and nothing on screen explains why.
+    if (v?.liveAsk?.printing) q.set("printing", v.liveAsk.printing);
+    if (scan.origin?.japaneseTextDetected) q.set("ja", "1");
     let alive = true;
     fetch(`${API}/market/listings?${q}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => { if (!alive) return; setData(j); setState("done"); })
       .catch(() => alive && setState("error"));
     return () => { alive = false; };
-  }, [id?.name, id?.setName, id?.localId, v?.slabGrader, v?.slabGrade]);
+  }, [id?.name, id?.setName, id?.localId, v?.slabGrader, v?.slabGrade,
+      v?.liveAsk?.printing, scan.origin?.japaneseTextDetected]);
 
   const listings = data?.listings ?? [];
   const label = v?.slabGrader && v?.slabGrade != null
@@ -1905,9 +1950,10 @@ function LiveListings({ scan }: { scan: Scan }) {
         <div>
           <div className="label-mono accent-text">CURRENTLY LISTED</div>
           <p className="note" style={{ margin: "4px 0 0" }}>
-            Live asking prices on eBay{data?.filteredToGrade && label ? <> for <b>{label}</b> copies</> : null}.
-            These are what sellers <b>want</b>, not what cards <b>sold</b> for — the valuation
-            above is drawn from completed sales.
+            Live asking prices on eBay{data?.filteredToGrade && label ? <> for <b>{label}</b> copies</> : null}
+            {data?.filteredToPrinting && data.printing ? <> of the <b>{data.printing}</b> printing</> : null}.
+            These are what sellers <b>want</b>, not what cards <b>sold</b> for — sold prices
+            usually land below the asks.
           </p>
         </div>
         {data?.medianAsk != null && (
@@ -1950,6 +1996,7 @@ function LiveListings({ scan }: { scan: Scan }) {
                   {l.grader && l.grade != null && (
                     <span className="listing-grade">{l.grader} {l.grade}</span>
                   )}
+                  {l.printing && <span className="listing-printing">{l.printing}</span>}
                   {l.condition && <span>{l.condition}</span>}
                 </div>
               </div>

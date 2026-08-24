@@ -191,6 +191,14 @@ export const Valuation = z.object({
       total: z.number(),
       grader: z.string(),
       grade: z.number(),
+      /** the printing these figures are for — a card number is not a product */
+      printing: z.string().nullish(),
+      /** printings of the same number we excluded, with their asking ranges */
+      otherPrintings: z
+        .array(z.object({
+          name: z.string(), count: z.number(), low: z.number(), high: z.number(),
+        }))
+        .default([]),
     })
     .nullish(),
   // market price × condition multiplier derived from the grade estimate —

@@ -12,6 +12,7 @@ import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
 import { fetchListings } from "./ebaylistings.js";
+import { readPrinting } from "./printing.js";
 import { writeGradePrices } from "../cards.store.js";
 
 // Mirrors TIERS in services/vision/app/pipeline/slab.py. Never price across
@@ -66,6 +67,8 @@ export class ScansService {
   ): Promise<Scan> {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
+    // free text gathered along the way that might name this copy's printing
+    const printingHints: string[] = [];
     const dir = join(STORAGE_ROOT, id);
     mkdirSync(dir, { recursive: true });
 
@@ -181,6 +184,19 @@ export class ScansService {
     // game catalogs are searched in parallel; the best match wins.
     if (frontRes.ocr) {
       scan.ocrNames = frontRes.ocr.nameCandidates ?? [];
+      // Every scrap of text that might name the PRINTING. The card number does
+      // not identify a product — OP13-119 is four products — so the printing
+      // has to come from somewhere else: the slab label (Beckett prints the
+      // variant), the card's own text, and the vision model's read of the art.
+      printingHints.push(...(frontRes.ocr.texts ?? []).map(String));
+      if (frontRes.ocr.slab) {
+        const L = frontRes.ocr.slab as Record<string, any>;
+        printingHints.push(
+          ...[L.setLine, L.name, L.gradeText, ...(L.setCandidates ?? [])]
+            .filter(Boolean)
+            .map(String),
+        );
+      }
       const names = scan.ocrNames.slice(0, 3);
 
       // A graded slab carries its own answer key: the label prints the set and
@@ -222,6 +238,8 @@ export class ScansService {
           front.buffer.toString("base64"),
           front.mimetype,
         );
+        if (opinion?.printing) printingHints.push(opinion.printing);
+        if (opinion?.edition) printingHints.push(opinion.edition);
         if (opinion && opinion.game !== match.identification.game) {
           match = undefined as unknown as typeof match;
           scan.identification = {
@@ -315,6 +333,8 @@ export class ScansService {
         // game, loop the name back through the real catalog for verified data.
         const llm = await identifyWithGemini(front.buffer.toString("base64"), front.mimetype);
         if (llm) {
+          if (llm.printing) printingHints.push(llm.printing);
+          if (llm.edition) printingHints.push(llm.edition);
           const pseudoOcr = {
             nameCandidates: [llm.name],
             collectorNumber: frontRes.ocr.collectorNumber ?? null,
@@ -565,6 +585,24 @@ export class ScansService {
       const sold = scan.valuation.pricesByGrader?.[askGrader]?.[String(askGrade)]?.price;
       if (sold == null && scan.identification) {
         try {
+          // Which PRINTING is this copy? Nothing so far had to answer that:
+          // the catalog match resolves a card NUMBER, and a number is not a
+          // product. OP13-119 is sold as manga art, alternate art, parallel and
+          // wanted-poster SP, asking $82 to $8,200 for the same three digits,
+          // so pricing without the printing averages four different cards.
+          //
+          // The label and the card's own text usually do not name it — "manga
+          // art" is a collector's term, not something printed on the card — so
+          // where they come up empty we ask the vision model, which can see the
+          // artwork. One extra call, spent only when it changes the answer.
+          if (!readPrinting(printingHints.join(" ")).family) {
+            const p = await identifyWithGemini(
+              front.buffer.toString("base64"),
+              front.mimetype,
+            );
+            if (p?.printing) printingHints.push(p.printing);
+            if (p?.edition) printingHints.push(p.edition);
+          }
           const live = await fetchListings({
             name: scan.identification.name,
             setName: scan.identification.setName,
@@ -572,6 +610,8 @@ export class ScansService {
             grader: askGrader,
             grade: askGrade,
             limit: 24,
+            printingHint: [...printingHints, scan.identification.rarity ?? ""].join(" "),
+            japanese: scan.origin?.japaneseTextDetected ?? false,
           });
           // filteredToGrade is the condition, not a nicety: an unfiltered median
           // mixes a PSA 10 ask into a BGS 8 valuation, which is the cross-grader
@@ -585,6 +625,8 @@ export class ScansService {
               total: live.total,
               grader: askGrader,
               grade: askGrade,
+              printing: live.filteredToPrinting ? live.printing : null,
+              otherPrintings: live.otherPrintings,
             };
           }
         } catch {

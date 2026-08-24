@@ -34,8 +34,15 @@ export class MarketController {
     @Query("number") number?: string,
     @Query("grader") grader?: string,
     @Query("grade") grade?: string,
+    @Query("printing") printing?: string,
+    @Query("ja") ja?: string,
   ) {
-    if (!name) return { listings: [], total: 0, query: "", filteredToGrade: false };
+    const empty = {
+      listings: [], total: 0, matched: 0, query: name ?? "", filteredToGrade: false,
+      medianAsk: null, askLow: null, askHigh: null,
+      printing: null, filteredToPrinting: false, otherPrintings: [],
+    };
+    if (!name) return empty;
     const g = grade != null && grade !== "" ? Number(grade) : null;
     return (
       (await fetchListings({
@@ -44,7 +51,11 @@ export class MarketController {
         number: number ?? null,
         grader: grader ?? null,
         grade: Number.isFinite(g) ? g : null,
-      })) ?? { listings: [], total: 0, query: name, filteredToGrade: false }
+        // the panel must narrow to the same printing the valuation used, or the
+        // two disagree on screen for reasons no reader can see
+        printingHint: printing ?? null,
+        japanese: ja === "1" || ja === "true",
+      })) ?? empty
     );
   }
 
