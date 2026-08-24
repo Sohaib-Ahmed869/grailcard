@@ -1583,7 +1583,12 @@ function Result({ scan }: { scan: Scan }) {
       )}
       <IdentityPanel scan={scan} />
       <GradePanel scan={scan} />
-      <RecommendationPanel scan={scan} />
+      {/* "should you grade this?" is a question about a raw card. For one
+          already in a slab there is no decision to make, and showing a
+          grade/don't-grade verdict beside someone else's certification reads
+          as us second-guessing it. The slab banner above already says the
+          label grade stands. */}
+      {!scan.slab && <RecommendationPanel scan={scan} />}
 
       {scan.status === "rejected" && scan.rejection ? (
         <div className="result-grid">
