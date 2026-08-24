@@ -126,10 +126,34 @@ export const GradedPrices = z.object({
 });
 export type GradedPrices = z.infer<typeof GradedPrices>;
 
+/** Prices keyed by grading company, then by grade.
+ *
+ *  The flat psa8/psa9/psa10 shape above cannot express "we hold PSA sales but
+ *  no Beckett sales", so a BGS 8.5 was silently read off the PSA 8 column.
+ *  This keeps each grader's data separate, which lets the UI show a Beckett
+ *  tab that honestly says "no data" instead of PSA numbers under a BGS badge.
+ *
+ *  Shape: { PSA: { "8": 14299, "9": 15125, "10": 58723 } }
+ */
+export const PricesByGrader = z.record(
+  z.string(),                       // grader: PSA | BGS | CGC | SGC | ...
+  z.record(z.string(), z.number()), // grade as written ("8", "9.5", "10")
+);
+export type PricesByGrader = z.infer<typeof PricesByGrader>;
+
 export const Valuation = z.object({
   source: z.string(),
   updatedAt: z.string().nullish(),
   graded: GradedPrices.nullish(),
+  // grader-separated prices; the flat `graded` above stays for now so older
+  // callers keep working
+  pricesByGrader: PricesByGrader.nullish(),
+  // what the slab actually is, carried alongside so the UI never has to infer
+  // a grader from a bare number
+  slabGrader: z.string().nullish(),
+  slabGrade: z.number().nullish(),
+  /** printing/variant as the catalog names it: Holofoil, Reverse Holofoil… */
+  variant: z.string().nullish(),
   // market price × condition multiplier derived from the grade estimate —
   // what THIS copy is plausibly worth raw, not a near-mint copy
   conditionAdjusted: z

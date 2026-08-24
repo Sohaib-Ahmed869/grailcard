@@ -470,6 +470,28 @@ export class ScansService {
       scan.valuation.graded = estimateGradedFromRaw(rawForEst);
     }
 
+    // Separate the graded prices by the company that actually issued them.
+    // Everything we can buy today is PSA sale data, so PSA is the only key that
+    // gets populated — and that is precisely the point: a Beckett card now
+    // shows an empty Beckett tab rather than PSA numbers wearing a BGS badge.
+    if (scan.valuation?.graded) {
+      const g = scan.valuation.graded;
+      const psa: Record<string, number> = {};
+      if (g.psa8 != null) psa["8"] = g.psa8;
+      if (g.psa9 != null) psa["9"] = g.psa9;
+      if (g.psa10 != null) psa["10"] = g.psa10;
+      if (Object.keys(psa).length > 0) scan.valuation.pricesByGrader = { PSA: psa };
+    }
+    // the grader and grade as read off the label, so the UI never re-derives
+    // them from a display string
+    const labelSlab = frontRes.ocr?.slab as
+      | { grader?: string | null; grade?: number | null }
+      | undefined;
+    if (scan.valuation && labelSlab?.grader) {
+      scan.valuation.slabGrader = labelSlab.grader;
+      scan.valuation.slabGrade = labelSlab.grade ?? null;
+    }
+
     // market prices are near-mint; adjust to THIS copy's estimated condition
     const nmPrice =
       scan.valuation?.tcgplayer?.market ??

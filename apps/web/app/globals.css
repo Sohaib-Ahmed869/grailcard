@@ -1626,3 +1626,69 @@ button.primary:disabled {
   color: var(--muted);
 }
 .ph-method-list b { color: var(--text); }
+
+/* ============ GRADER TABS ============ */
+/* A grade belongs to the company that issued it. Prices are shown per grader
+   so a Beckett card can never display PSA figures under a Beckett heading. */
+
+.ph-graders { margin-top: 18px; }
+
+.grader-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.grader-tab {
+  position: relative;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+
+.grader-tab:hover { border-color: var(--border-strong); color: var(--text); }
+
+.grader-tab.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(245, 165, 36, 0.10);
+}
+
+/* a grader we hold no sales for still gets a tab — the absence is information */
+.grader-tab.is-empty { opacity: .55; }
+.grader-tab.is-empty.is-active { opacity: 1; }
+
+/* marks the company that actually certified THIS card */
+.grader-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.grader-empty {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 15px;
+  margin: 0;
+  line-height: 1.55;
+  background: var(--panel-2);
+}
+.grader-empty b { color: var(--text); }
+
+@media (max-width: 640px) {
+  .grader-tabs { gap: 5px; }
+  .grader-tab { font-size: 10px; padding: 6px 10px; }
+}

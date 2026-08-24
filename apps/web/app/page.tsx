@@ -110,6 +110,10 @@ type Scan = {
       avg30?: number | null;
     } | null;
     conditionAdjusted?: { value: number; multiplier: number } | null;
+    pricesByGrader?: Record<string, Record<string, number>> | null;
+    slabGrader?: string | null;
+    slabGrade?: number | null;
+    variant?: string | null;
   } | null;
 };
 
@@ -1469,6 +1473,104 @@ const SOURCE_LABEL: Record<string, string> = {
   cardmarket: "Cardmarket trend",
 };
 
+
+/* ── grader tabs ─────────────────────────────────────────────────────────────
+   A grade belongs to the company that issued it, so the prices are shown per
+   grader rather than as a single PSA ladder. Selecting a grader we hold no
+   sales for says exactly that: a Beckett card must never display PSA figures
+   under a Beckett heading. */
+
+const GRADER_ORDER = ["Ungraded", "PSA", "BGS", "CGC", "SGC", "TAG", "ACE"];
+const GRADER_LABEL: Record<string, string> = {
+  BGS: "BECKETT", PSA: "PSA", CGC: "CGC", SGC: "SGC", TAG: "TAG", ACE: "ACE",
+  Ungraded: "Ungraded",
+};
+
+function GraderTabs({ scan, pv }: { scan: Scan; pv: PriceView }) {
+  const v = scan.valuation;
+  const byGrader = v?.pricesByGrader ?? {};
+  const slabGrader = v?.slabGrader ?? null;
+  // open on the card's own grader — that is the question the owner is asking
+  const [active, setActive] = useState<string>(slabGrader ?? "Ungraded");
+  useEffect(() => {
+    setActive(slabGrader ?? "Ungraded");
+  }, [slabGrader]);
+
+  const rawValue = pv.raw;
+  const grades = byGrader[active] ?? {};
+  const gradeKeys = Object.keys(grades).sort((a, b) => Number(b) - Number(a));
+  const slabGradeStr =
+    v?.slabGrade != null ? String(v.slabGrade).replace(/\.0$/, "") : null;
+
+  return (
+    <div className="ph-graders">
+      <div className="grader-tabs" role="tablist" aria-label="Grading company">
+        {GRADER_ORDER.map((g) => {
+          const has = g === "Ungraded" ? rawValue != null : Boolean(byGrader[g]);
+          const isCardGrader = g === slabGrader;
+          return (
+            <button
+              key={g}
+              type="button"
+              role="tab"
+              aria-selected={active === g}
+              className={
+                "grader-tab" +
+                (active === g ? " is-active" : "") +
+                (isCardGrader ? " is-card" : "") +
+                (has ? "" : " is-empty")
+              }
+              onClick={() => setActive(g)}
+            >
+              {GRADER_LABEL[g] ?? g}
+              {isCardGrader && <span className="grader-dot" aria-label="this card" />}
+            </button>
+          );
+        })}
+      </div>
+
+      {active === "Ungraded" ? (
+        rawValue != null ? (
+          <div className="ph-grades">
+            <div className="ph-grade">
+              <div className="ph-grade-label">Raw · ungraded</div>
+              <div className="ph-grade-value">
+                <Money v={rawValue} unit={pv.rawUnit} showSource={false} />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="grader-empty muted small">No ungraded market price for this card.</p>
+        )
+      ) : gradeKeys.length > 0 ? (
+        <div className="ph-grades">
+          {gradeKeys.map((k) => {
+            const mine = active === slabGrader && k === slabGradeStr;
+            return (
+              <div className={`ph-grade${mine ? " is-slab" : ""}`} key={k}>
+                <div className="ph-grade-label">
+                  {GRADER_LABEL[active] ?? active} {k}
+                  {mine && <span className="ph-grade-you">this card</span>}
+                </div>
+                <div className="ph-grade-value">
+                  <Money v={grades[k]} showSource={false} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="grader-empty muted small">
+          <b>No {GRADER_LABEL[active] ?? active} sales data available to us.</b>{" "}
+          {active === slabGrader
+            ? `This card is a ${GRADER_LABEL[active]} ${slabGradeStr ?? ""} — the figure above is taken from the nearest PSA tier, which is a different grading scale.`
+            : "Our sold-comp source publishes PSA sales only."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PriceHero({ scan }: { scan: Scan }) {
   const pv = priceView(scan);
   const { code } = useCurrency();
@@ -1536,25 +1638,7 @@ function PriceHero({ scan }: { scan: Scan }) {
             </div>
           </div>
 
-          {pv.grades.some((x) => x.value != null) && (
-            <div className="ph-grades">
-              {pv.grades.map((row) => (
-                <div className={`ph-grade${row.isSlab ? " is-slab" : ""}`} key={row.label}>
-                  <div className="ph-grade-label">
-                    {row.label}
-                    {row.isSlab && (
-                      <span className="ph-grade-you">
-                        {pv.crossGrader ? "closest tier" : "this slab"}
-                      </span>
-                    )}
-                  </div>
-                  <div className="ph-grade-value">
-                    <Money v={row.value} showSource={false} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <GraderTabs scan={scan} pv={pv} />
         </>
       ) : (
         <div className="ph-empty">
