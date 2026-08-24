@@ -11,6 +11,7 @@ import { estimateGradedFromRaw, fetchCardGraderMarket } from "./cardgrader.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
+import { fetchListings } from "./ebaylistings.js";
 import { writeGradePrices } from "../cards.store.js";
 
 // Mirrors TIERS in services/vision/app/pipeline/slab.py. Never price across
@@ -546,6 +547,50 @@ export class ScansService {
     if (scan.valuation && labelSlab?.grader) {
       scan.valuation.slabGrader = labelSlab.grader;
       scan.valuation.slabGrade = labelSlab.grade ?? null;
+    }
+
+    // Where we hold no SOLD comps at the card's own grade, fall back to what
+    // the market is currently ASKING for the same slab.
+    //
+    // The alternative was quoting the raw price, and on a One Piece BGS 9.5 the
+    // raw price is $1.99 while nine live listings for that exact card at that
+    // exact grade sit between $109 and $2,374. Answering "$2.78" there is not
+    // conservative, it is wrong by three orders of magnitude — and the evidence
+    // contradicting it was already on the same screen, in our own listings
+    // panel. An ask is weaker than a sale and is labelled as one, but it beats
+    // a number drawn from a different market entirely.
+    const askGrader = scan.valuation?.slabGrader ?? null;
+    const askGrade = scan.valuation?.slabGrade ?? null;
+    if (scan.valuation && askGrader && askGrader !== "UNKNOWN" && askGrade != null) {
+      const sold = scan.valuation.pricesByGrader?.[askGrader]?.[String(askGrade)]?.price;
+      if (sold == null && scan.identification) {
+        try {
+          const live = await fetchListings({
+            name: scan.identification.name,
+            setName: scan.identification.setName,
+            number: scan.identification.localId,
+            grader: askGrader,
+            grade: askGrade,
+            limit: 24,
+          });
+          // filteredToGrade is the condition, not a nicety: an unfiltered median
+          // mixes a PSA 10 ask into a BGS 8 valuation, which is the cross-grader
+          // error this whole redesign exists to stop.
+          if (live?.medianAsk != null && live.filteredToGrade) {
+            scan.valuation.liveAsk = {
+              median: live.medianAsk,
+              low: live.askLow ?? null,
+              high: live.askHigh ?? null,
+              count: live.listings.length,
+              total: live.total,
+              grader: askGrader,
+              grade: askGrade,
+            };
+          }
+        } catch {
+          // asks are a fallback; failing to get them is not a failed scan
+        }
+      }
     }
 
     // market prices are near-mint; adjust to THIS copy's estimated condition

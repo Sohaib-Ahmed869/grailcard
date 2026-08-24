@@ -128,6 +128,17 @@ type Scan = {
     slabGrader?: string | null;
     slabGrade?: number | null;
     variant?: string | null;
+    /** median live ASKING price at the card's own grader and grade, present
+     *  only where no completed sale at that grade reaches us */
+    liveAsk?: {
+      median: number;
+      low?: number | null;
+      high?: number | null;
+      count: number;
+      total: number;
+      grader: string;
+      grade: number;
+    } | null;
   } | null;
 };
 
@@ -1398,6 +1409,14 @@ type PriceView = {
   grades: { label: string; value: number | null; isSlab: boolean }[];
   /** the company on the label, if any */
   slabCompany: string | null;
+  /** median LIVE ASKING price at this exact grader+grade, where we hold no
+   *  sold comps for it. An ask, clearly labelled as one — never a sale. */
+  ask: {
+    median: number; low?: number | null; high?: number | null;
+    count: number; grader: string; grade: number;
+  } | null;
+  /** true when the headline figure is an asking price, not a completed sale */
+  headlineIsAsk: boolean;
   /** true when the sale comps are from a DIFFERENT grader than the slab.
    *  Our comps are PSA sales; a BGS or CGC card is being read across. */
   crossGrader: boolean;
@@ -1448,10 +1467,8 @@ function priceView(scan: Scan): PriceView {
   // A raw card is worth its raw market price. There is no condition
   // adjustment any more — we stopped grading, so there is no grade to
   // discount by, and inventing one turned an $84 card into $21.
-  const headline = slabGradeUnknown ? null : (slabValue ?? raw ?? null);
-  // graded comps and conditionAdjusted are always USD; only `raw` can be EUR
-  const headlineUnit = slabValue != null ? "USD" : headline === raw ? rawUnit : "USD";
   const slabCompany = scan.slab?.company ?? null;
+  const ask = v?.liveAsk ?? null;
   // Every graded comp we can buy is a PSA sale. For a Beckett or CGC slab we
   // are therefore quoting the nearest PSA tier, not a sale of this card in
   // this holder — and the two are not interchangeable. Say so rather than
@@ -1459,13 +1476,35 @@ function priceView(scan: Scan): PriceView {
   const crossGrader = Boolean(
     slabCompany && slabCompany !== "PSA" && slabCompany !== "UNKNOWN" && slabValue != null,
   );
-  const headlineLabel = slabValue
-    ? crossGrader
-      ? `${scan.slab!.company} ${scan.slab!.gradeText} — priced at the nearest PSA tier`
-      : `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
-    : raw != null
-      ? "raw, ungraded market price"
-      : "no market price found";
+
+  // An asking price for the RIGHT grader and grade beats a completed sale from
+  // the wrong one, so it outranks a cross-grader figure — but never a genuine
+  // same-grader sale.
+  const headlineIsAsk = ask != null && (slabValue == null || crossGrader);
+
+  // A slabbed card is NEVER quoted at its raw price. That fallback is what put
+  // A$2.78 above a One Piece BGS 9.5 whose own listings panel, on the same
+  // screen, showed A$800-2,374. With no graded figure and no ask we say so and
+  // show nothing — a blank is cheap, a wrong number is not.
+  const headline = slabGradeUnknown
+    ? null
+    : headlineIsAsk
+      ? ask!.median
+      : scan.slab
+        ? slabValue ?? null
+        : raw ?? null;
+  // asks and graded comps are USD; only `raw` can be EUR
+  const headlineUnit = headline === raw && !scan.slab ? rawUnit : "USD";
+
+  const headlineLabel = headlineIsAsk
+    ? `median asking price · ${ask!.count} live ${ask!.grader} ${ask!.grade} listings`
+    : slabValue
+      ? crossGrader
+        ? `${scan.slab!.company} ${scan.slab!.gradeText} — priced at the nearest PSA tier`
+        : `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
+      : raw != null
+        ? "raw, ungraded market price"
+        : "no market price found";
 
   const grades = g
     ? ([["PSA 10", g.psa10, 10], ["PSA 9", g.psa9, 9], ["PSA 8", g.psa8, 8]] as const).map(
@@ -1489,6 +1528,8 @@ function priceView(scan: Scan): PriceView {
     rawUnit,
     grades,
     slabCompany,
+    ask,
+    headlineIsAsk,
     crossGrader,
     verified: Boolean(g && !g.estimated),
     source: g?.source ?? (v?.tcgplayer ? "tcgplayer" : v?.cardmarket ? "cardmarket" : null),
@@ -1685,11 +1726,13 @@ function PriceHero({ scan }: { scan: Scan }) {
         <>
           <div className="ph-figure">
             <div className="label-mono accent-text">
-              ESTIMATED VALUE{pv.crossGrader ? " · CROSS-GRADER ESTIMATE" : ""}
+              {pv.headlineIsAsk
+                ? `CURRENT ASKING PRICE · ${pv.ask!.grader} ${pv.ask!.grade}`
+                : `ESTIMATED VALUE${pv.crossGrader ? " · CROSS-GRADER ESTIMATE" : ""}`}
             </div>
             <div className="ph-price">
               <Money v={pv.headline} unit={pv.headlineUnit} showSource={false} />
-              <span className="ph-est-tag">est.</span>
+              <span className="ph-est-tag">{pv.headlineIsAsk ? "asking" : "est."}</span>
             </div>
             <div className="muted small ph-sub">
               {pv.headlineLabel}
@@ -1708,13 +1751,37 @@ function PriceHero({ scan }: { scan: Scan }) {
                 </>
               )}
             </div>
+            {pv.headlineIsAsk && pv.ask!.low != null && pv.ask!.high != null && (
+              <div className="muted small ph-sub">
+                {"listings run "}
+                <b style={{ color: "var(--text)" }}>
+                  <Money v={pv.ask!.low} unit="USD" showSource={false} />
+                  {" – "}
+                  <Money v={pv.ask!.high} unit="USD" showSource={false} />
+                </b>
+                {" — a wide spread usually means the listings cover more than one "}
+                {"printing of this card. Check the titles below against yours."}
+              </div>
+            )}
             <div className="ph-prov">
-              <span className={`badge ${pv.verified ? "pass" : "warn"}`}>
-                {pv.verified ? "verified sales" : "estimated"}
-              </span>
-              <span className="muted small">
-                {pv.source ? SOURCE_LABEL[pv.source] ?? pv.source : "no pricing source"}
-              </span>
+              {pv.headlineIsAsk ? (
+                <>
+                  <span className="badge warn">asking prices</span>
+                  <span className="muted small">
+                    We hold no completed sales for a {pv.ask!.grader} {pv.ask!.grade} of this
+                    card, so this is what sellers are asking today — not what one sold for.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className={`badge ${pv.verified ? "pass" : "warn"}`}>
+                    {pv.verified ? "verified sales" : "estimated"}
+                  </span>
+                  <span className="muted small">
+                    {pv.source ? SOURCE_LABEL[pv.source] ?? pv.source : "no pricing source"}
+                  </span>
+                </>
+              )}
             </div>
           </div>
 

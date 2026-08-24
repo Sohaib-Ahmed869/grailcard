@@ -176,6 +176,23 @@ export const Valuation = z.object({
   slabGrade: z.number().nullish(),
   /** printing/variant as the catalog names it: Holofoil, Reverse Holofoil… */
   variant: z.string().nullish(),
+  /** Median LIVE ASKING price for this card at THIS grader and grade, from
+   *  current eBay listings. Populated only where we hold no sold comps at the
+   *  card's grade — an ask is weaker evidence than a sale and never displaces
+   *  one. It exists because the alternative was quoting a $2 raw price for a
+   *  slab the market is asking $1,100 for, which is the worse error by far. */
+  liveAsk: z
+    .object({
+      median: z.number(),
+      low: z.number().nullish(),
+      high: z.number().nullish(),
+      /** listings behind the median, and how many matched the search overall */
+      count: z.number(),
+      total: z.number(),
+      grader: z.string(),
+      grade: z.number(),
+    })
+    .nullish(),
   // market price × condition multiplier derived from the grade estimate —
   // what THIS copy is plausibly worth raw, not a near-mint copy
   conditionAdjusted: z
