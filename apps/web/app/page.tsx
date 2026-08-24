@@ -581,6 +581,14 @@ function CaptureSlot({
         className={`scan-frame${scanning ? " scanning" : ""}`}
         onClick={() => !scanning && inputRef.current?.click()}
         onDragOver={(e) => e.preventDefault()}
+        onPaste={(e) => {
+          const f = imageFromClipboard(e.clipboardData as unknown as DataTransfer);
+          if (f && !scanning) {
+            e.preventDefault();
+            onPick(f);
+          }
+        }}
+        tabIndex={0}
         onDrop={(e) => {
           e.preventDefault();
           const f = e.dataTransfer.files[0];
@@ -1830,6 +1838,25 @@ function Result({ scan }: { scan: Scan }) {
   );
 }
 
+/** Pull an image out of a clipboard payload, if there is one.
+ *
+ *  A screenshot arrives as a `file` item with no usable name, so it is given
+ *  one — some servers reject a multipart part with an empty filename, and a
+ *  real extension keeps the mime type honest downstream.
+ */
+function imageFromClipboard(dt: DataTransfer | null): File | null {
+  if (!dt) return null;
+  for (const item of Array.from(dt.items ?? [])) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const f = item.getAsFile();
+    if (!f) continue;
+    if (f.name && f.name !== "image.png") return f;
+    const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    return new File([f], `pasted-${Date.now()}.${ext}`, { type: f.type });
+  }
+  return null;
+}
+
 function HomeInner() {
   const { q: quota, reload: reloadQuota } = useQuota();
 
@@ -1854,6 +1881,37 @@ function HomeInner() {
     const t = setInterval(() => setStep((s) => (s + 1) % SCAN_STEPS.length), 900);
     return () => clearInterval(t);
   }, [busy]);
+
+  // Paste a screenshot straight in. The listener sits on the document rather
+  // than a slot: on a fresh page nothing is focused, so a slot-level handler
+  // would never fire until something was clicked first. Front fills before
+  // back, matching the order they are asked for.
+  const [pastedInto, setPastedInto] = useState<string | null>(null);
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (busy) return;
+      const f = imageFromClipboard(e.clipboardData);
+      if (!f) return;
+      e.preventDefault();
+      if (!front) {
+        setFront(f);
+        setPastedInto("front");
+      } else {
+        setBack(f);
+        setPastedInto("back");
+      }
+      setScan(null);
+      setError(null);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [busy, front]);
+
+  useEffect(() => {
+    if (!pastedInto) return;
+    const t = setTimeout(() => setPastedInto(null), 2200);
+    return () => clearTimeout(t);
+  }, [pastedInto]);
 
   async function runScan() {
     if (!front) return;
@@ -1897,6 +1955,18 @@ function HomeInner() {
         <CaptureSlot label="Front" required file={front} onPick={setFront} scanning={busy} />
         <CaptureSlot label="Back" file={back} onPick={setBack} scanning={busy} />
       </div>
+      <p className="paste-hint muted small">
+        {pastedInto ? (
+          <span className="paste-ok">Pasted into the {pastedInto} slot.</span>
+        ) : (
+          <>
+            You can paste a screenshot straight in — press <kbd>⌘</kbd><kbd>V</kbd>{" "}
+            anywhere on this page. To put a screenshot on the clipboard on a Mac use{" "}
+            <kbd>⌘</kbd><kbd>⌃</kbd><kbd>⇧</kbd><kbd>4</kbd> — adding Control sends it
+            to the clipboard instead of saving a file.
+          </>
+        )}
+      </p>
       <div className="scan-status">
         {busy ? SCAN_STEPS[step] : ""}
         {busy && step >= SCAN_STEPS.length - 1 && (
