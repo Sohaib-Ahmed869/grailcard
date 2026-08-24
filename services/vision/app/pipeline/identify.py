@@ -253,9 +253,15 @@ def parse_slab(texts: list) -> dict | None:
         # opinion, raw-card review). That verdict beats the loose read above.
         return None
 
-    if tup.is_slab and tup.grade is not None and not grade_text:
-        # no wording survived OCR ("SGC 88", "TAG 9.8") — show the tuple
-        grade_text = f"{tup.grader} {tup.grade:g}".strip()
+    if tup.is_slab and tup.grade is not None:
+        if not grade_text:
+            # no wording survived OCR ("SGC 88", "TAG 9.8") — show the tuple
+            grade_text = f"{tup.grader} {tup.grade:g}".strip()
+        elif not re.search(r"\d", grade_text):
+            # wording read but the digit did not ("MINT" with no 9). The scale
+            # supplies it, so print it — a display string with no number leaves
+            # every downstream reader parsing for one that is not there.
+            grade_text = f"{grade_text} {tup.grade:g}".strip()
     if tup.qualifier and tup.qualifier not in grade_text:
         grade_text = f"{grade_text} ({tup.qualifier})".strip()
 

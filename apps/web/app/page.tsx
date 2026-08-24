@@ -1408,6 +1408,11 @@ type PriceView = {
 /** Numeric grade off a slab label ("NM-MT 8.5" -> 8.5, "GEM MT 10" -> 10). */
 function slabGradeNum(scan: Scan): number {
   if (!scan.slab) return NaN;
+  // Prefer the numeric grade the reader already resolved. Scraping it back out
+  // of a display string fails whenever the label prints a word and no digit —
+  // "PSA MINT" is a grade of 9, but the regex sees nothing.
+  const fromField = scan.valuation?.slabGrade;
+  if (typeof fromField === "number" && Number.isFinite(fromField)) return fromField;
   return Number(scan.slab.gradeText.match(/(\d+(?:\.\d)?)\s*$/)?.[1]);
 }
 

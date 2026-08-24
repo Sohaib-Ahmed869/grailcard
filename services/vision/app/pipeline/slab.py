@@ -29,6 +29,43 @@ TIERS: dict[str, str] = {
     "HGA": "discount", "CSG": "discount",
 }
 
+# PSA's grade word and grade number are the same fact printed twice: the scale
+# is published and fixed, so MINT is always 9 and GEM MT is always 10. That
+# redundancy is worth using, because the two are not equally readable. The word
+# is several characters with redundant shape; the number is a single isolated
+# glyph, and OCR read the 9 on a MINT label as a 6 — which then priced a PSA 9
+# as a PSA 6. Where the word is legible it decides, and the digit only confirms.
+#
+# A trailing "+" marks the half grade below the next word (NM-MT+ is 8.5).
+# Note there is no PSA 9.5: the ladder runs 9 -> 10.
+PSA_WORD_GRADE: dict[str, float] = {
+    "GEM MT": 10.0, "GEM MINT": 10.0,
+    "MINT": 9.0,
+    "NM-MT": 8.0, "NM MT": 8.0, "NMMT": 8.0,
+    "NM": 7.0, "NEAR MINT": 7.0,
+    "EX-MT": 6.0, "EX MT": 6.0, "EXMT": 6.0,
+    "EX": 5.0,
+    "VG-EX": 4.0, "VG EX": 4.0, "VGEX": 4.0,
+    "VG": 3.0,
+    "GOOD": 2.0,
+    "FR": 1.5, "FAIR": 1.5,
+    "PR": 1.0, "POOR": 1.0,
+}
+
+
+def psa_grade_from_word(U: str) -> float | None:
+    """PSA grade implied by the printed word, half-step if it carries a '+'."""
+    for word in sorted(PSA_WORD_GRADE, key=len, reverse=True):
+        m = re.search(r"\b" + word.replace(" ", r"[-\s]?") + r"\b\s*(\+)?", U)
+        if not m:
+            continue
+        g = PSA_WORD_GRADE[word]
+        if m.group(1) and g < 10:
+            g += 0.5          # NM-MT+ is 8.5
+        return g
+    return None
+
+
 # SGC's pre-2018 slabs use a 100-point scale. 88 is an 8, not a nonsense grade.
 SGC_LEGACY: dict[int, float] = {
     100: 10.0, 98: 9.0, 96: 9.0, 92: 8.5, 88: 8.0, 86: 7.5, 84: 7.0,
@@ -264,6 +301,11 @@ def _psa_qualified(U: str) -> SlabRead | None:
 
 
 def _psa_plain(U: str) -> SlabRead | None:
+    if re.search(r"\bPSA\b", U):
+        # the word decides where it is legible — see PSA_WORD_GRADE
+        by_word = psa_grade_from_word(U)
+        if _valid(by_word):
+            return SlabRead(grader="PSA", grade=by_word)
     m = re.search(r"\bPSA\s*(?:GEM\s*M(?:IN)?T|MINT|NM[-\s]?MT)?\s*" + _NUM, U)
     if m:
         g = _f(m.group(1))
@@ -362,7 +404,7 @@ def _by_cert_shape(U: str) -> SlabRead | None:
     if n == 10:
         return SlabRead(grader="BGS", grade=g)
     if n in (8, 9):
-        return SlabRead(grader="PSA", grade=g)
+        return SlabRead(grader="PSA", grade=psa_grade_from_word(U) or g)
     return None
 
 
