@@ -69,16 +69,39 @@ def run_pipeline(
     # rejected scan can still tell the user which card we saw
     ocr = read_card_text(det.warped) if (det is not None and read_text) else None
 
-    # slab labels live OUTSIDE the card crop — when the card is small in the
-    # frame (typical of slab photos), scan the FULL image for a label too
+    # A grading label sits OUTSIDE the card, so it is cropped away by the card
+    # detection and can never be read from the warped card alone. The retry on
+    # the full image existed, but was gated on the photo being REJECTED or
+    # low-detail — which is exactly backwards. A good, sharp photo of a slab
+    # passes the gate cleanly, so the retry never fired and the label went
+    # unread: no slab meant no answer-key identification (a Legendary
+    # Collection Charizard resolved to a Dragon Frontiers Gold Star) and no
+    # slab meant we graded a card someone had already graded.
+    #
+    # The real signal is what the comment always claimed: how much of the frame
+    # the card occupies. A slab photo leaves the card at a fraction of the
+    # frame because the case and its label surround it; a raw-card photo fills
+    # it. Below the threshold there is room for a label, so it is worth a look.
+    card_fill = None
+    if det is not None and getattr(det, "quad", None) is not None:
+        frame_area = float(image.shape[0] * image.shape[1])
+        if frame_area > 0:
+            card_fill = cv2.contourArea(det.quad.astype(np.float32)) / frame_area
+    room_for_a_label = card_fill is not None and card_fill < 0.65
+
     if (
         ocr is not None
         and not ocr.get("slab")
-        and (gate.rejection is not None or gate.quality.low_detail)
+        and (gate.rejection is not None or gate.quality.low_detail or room_for_a_label)
     ):
         full_reading = read_card_text(image)
         if full_reading.get("slab"):
             ocr = {**ocr, "slab": full_reading["slab"]}
+            # the label also carries the collector number and set, which the
+            # card face may not have given us
+            for k in ("collectorNumber", "setCode"):
+                if not ocr.get(k) and full_reading.get(k):
+                    ocr = {**ocr, k: full_reading[k]}
 
     if gate.rejection is not None:
         # the photo failed the gate, but if a card was detected we can still

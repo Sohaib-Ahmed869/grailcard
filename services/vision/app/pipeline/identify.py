@@ -23,8 +23,13 @@ SET_CODE_RE = re.compile(r"\b((?:OP|ST|EB|PRB)\d{2})\s*[-–]\s*(\d{3})\b", re.I
 
 _SLAB_COMPANIES = re.compile(r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS)\b", re.IGNORECASE)
 _COMPANY_ALIAS = {"BECKETT": "BGS"}
+# The full PSA/BGS wording ladder. The old pattern stopped at EX-MT, so a
+# genuine "EX 5" label matched nothing — and with the PSA logo unread too,
+# parse_slab bailed and the card was never recognised as slabbed at all.
+# Ordered longest-first so NM-MT is not consumed as NM, and VG-EX not as VG.
 _SLAB_GRADE = re.compile(
-    r"\b(GEM\s*M(?:IN)?T|MINT|NM[-\s]?MT|NM|EX[-\s]?MT|PRISTINE)\b\s*(10|9(?:\.5)?|[1-8](?:\.5)?)?\b",
+    r"\b(GEM\s*M(?:IN)?T|PRISTINE|NM[-\s]?MT|VG[-\s]?EX|EX[-\s]?MT|MINT|AUTHENTIC"
+    r"|POOR|FAIR|GOOD|NM|EX|VG|PR|FR)\b\s*\+?\s*(10|9(?:\.5)?|[1-8](?:\.5)?)?",
     re.IGNORECASE,
 )
 _CERT_RE = re.compile(r"\b(\d{7,10})\b")  # PSA 8-9 digits, BGS up to 10
@@ -63,7 +68,16 @@ def parse_slab(texts: list) -> dict | None:
     top_texts = [t for t in texts if t["top"] < 0.30]
     joined = " ".join(t["text"] for t in top_texts)
     company = _SLAB_COMPANIES.search(joined)
-    grade = _SLAB_GRADE.search(joined)
+    # Take the best grade match, not the first. A Beckett label reads
+    # "2006 EX DRAGON FRONTIERS ... NM-MT+ 8.5": the set-name "EX" appears
+    # first and would win a naive search, turning a NM-MT 8.5 into an EX.
+    # A match carrying a number is the real grade; failing that, the most
+    # specific wording is.
+    grade = None
+    _cands = list(_SLAB_GRADE.finditer(joined))
+    if _cands:
+        numbered = [m for m in _cands if m.group(2)]
+        grade = max(numbered or _cands, key=lambda m: len(m.group(1)))
     if not company and not grade:
         return None
     # require at least a condition phrase plus either company or cert
@@ -72,17 +86,30 @@ def parse_slab(texts: list) -> dict | None:
         return None
     grade_text = grade.group(0).upper().strip()
     if not grade.group(2):
-        # PSA prints the numeric grade huge, as its own line — prefer a
-        # standalone number token over digits embedded in nearby set names
-        standalone = next(
-            (
-                t["text"].strip()
-                for t in top_texts
-                if re.fullmatch(r"(10|9(?:\.5)?|[1-8](?:\.5)?)", t["text"].strip())
-            ),
-            None,
-        )
-        if standalone:
+        # PSA prints the numeric grade huge, on its own line, so the number is
+        # a separate token from the wording. Take the one NEAREST the grade
+        # word rather than the first in the list: photos are often screenshots
+        # of listings or social posts, and the frame is full of unrelated
+        # numerals. A "GEM MT 10" once became "GEM MT 5" because a post's like
+        # count appeared earlier in the reading order.
+        def _token_index_of(offset: int) -> int:
+            pos = 0
+            for i, t in enumerate(top_texts):
+                nxt = pos + len(t["text"]) + 1  # +1 for the joining space
+                if offset < nxt:
+                    return i
+                pos = nxt
+            return len(top_texts) - 1
+
+        anchor = _token_index_of(grade.start())
+        numeric = [
+            (i, t["text"].strip())
+            for i, t in enumerate(top_texts)
+            if re.fullmatch(r"(10|9(?:\.5)?|[1-8](?:\.5)?)", t["text"].strip())
+        ]
+        if numeric:
+            # after the wording beats before it, then nearest wins
+            i, standalone = min(numeric, key=lambda p: (p[0] < anchor, abs(p[0] - anchor)))
             grade_text = f"{grade_text} {standalone}"
     if company:
         raw_company = _COMPANY_ALIAS.get(company.group(1).upper(), company.group(1).upper())
@@ -175,8 +202,32 @@ def parse_slab(texts: list) -> dict | None:
             best_len = alpha
             label_name = cleaned
 
+    # Which label line holds the SET is not fixed. PSA prints
+    #   2002 POKEMON        <- year + brand
+    #   CHARIZARD-REV.FOIL  <- card
+    #   LEGENDARY COLLECTION<- set
+    # so the year-bearing line yields only "POKEMON" and the real set lands in
+    # `name`. Guessing which line is which sent a Legendary Collection
+    # Charizard to a Dragon Frontiers Gold Star. Rather than guess, hand the
+    # catalogue every plausible line and let it score them — it knows the set
+    # names, we do not.
+    generic = {"POKEMON", "PKMN", "TCG", "SWSH", "SM", "XY", "BW", "EX", "SV", ""}
+    candidates: list[str] = []
+    for cand in (set_line, label_name, *(_clean_label(t["text"]) for t in top_texts)):
+        if not cand:
+            continue
+        c = cand.strip()
+        words = [w for w in re.split(r"\s+", c.upper()) if w]
+        if not words or all(w in generic for w in words):
+            continue  # nothing but era/brand furniture
+        if sum(ch.isalpha() for ch in c) < 4:
+            continue
+        if c.upper() not in {x.upper() for x in candidates}:
+            candidates.append(c)
+
     return {
         "company": raw_company,
+        "setCandidates": candidates,
         "gradeText": grade_text,
         "certNumber": cert.group(1) if cert else None,
         "year": year,

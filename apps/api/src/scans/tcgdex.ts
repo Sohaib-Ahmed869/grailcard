@@ -311,25 +311,34 @@ function setLineVariants(raw: string): string[] {
  *  at four figures is far worse than no answer. */
 export async function identifyFromSlabLabel(label: {
   setLine?: string | null;
+  setCandidates?: string[] | null;
   cardNumber?: string | null;
   year?: string | null;
   name?: string | null;
 }): Promise<{ identification: Identification; valuation: Valuation | null } | null> {
-  // the set line is mandatory; the number is not — vintage PSA labels often
-  // print only "1999 POKEMON GAME / CHARIZARD-HOLO", no collector number
-  if (!label.setLine || (!label.cardNumber && !label.name)) return null;
+  // Which printed line carries the SET varies by label, so the reader hands us
+  // every plausible one and we score them all against the real catalogue. On a
+  // PSA label reading "2002 POKEMON / CHARIZARD-REV.FOIL / LEGENDARY
+  // COLLECTION", the year-bearing line yields only "POKEMON" — matching that
+  // alone put a Legendary Collection Charizard in Dragon Frontiers.
+  const lines = [
+    ...(label.setCandidates ?? []),
+    ...(label.setLine ? [label.setLine] : []),
+  ].filter(Boolean);
+  if (lines.length === 0 || (!label.cardNumber && !label.name)) return null;
   const sets = await allSets();
   if (sets.length === 0) return null;
 
-  const variants = setLineVariants(label.setLine);
   let bestSet: TcgdexSet | null = null;
   let bestScore = 0;
-  for (const set of sets) {
-    for (const v of variants) {
-      const s = similarity(v, set.name);
-      if (s > bestScore) {
-        bestScore = s;
-        bestSet = set;
+  for (const line of lines) {
+    for (const v of setLineVariants(line)) {
+      for (const set of sets) {
+        const s = similarity(v, set.name);
+        if (s > bestScore) {
+          bestScore = s;
+          bestSet = set;
+        }
       }
     }
   }
@@ -388,7 +397,7 @@ export async function identifyFromSlabLabel(label: {
   const built = await buildFromCardId(card.id, label.name ?? card.name, 0.97);
   if (built) {
     console.log(
-      `[slab] "${label.setLine}${label.cardNumber ? ` #${label.cardNumber}` : ""}" -> ${card.id} (${card.name}), set match ${bestScore.toFixed(2)}`,
+      `[slab] ${lines.length} label line(s) -> set "${bestSet.name}" (${bestScore.toFixed(2)}), #${card.localId} -> ${card.id} (${card.name})`,
     );
   }
   return built;
