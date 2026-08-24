@@ -1391,6 +1391,8 @@ type PriceView = {
   headline: number | null;      // the number that answers "what is it worth"
   headlineUnit: string;         // currency the headline is quoted in
   headlineLabel: string;        // what that number represents
+  /** slab detected but the grade could not be read off the label */
+  slabGradeUnknown: boolean;
   raw: number | null;           // ungraded market, for context
   rawUnit: string;
   grades: { label: string; value: number | null; isSlab: boolean }[];
@@ -1422,6 +1424,11 @@ function priceView(scan: Scan): PriceView {
     v?.tcgplayer?.market ?? v?.cardmarket?.trend ?? v?.webEstimate?.value ?? null;
 
   const n = slabGradeNum(scan);
+  // A slab whose grade digit we could not read. Falling back to the raw price
+  // here is the worst possible answer: the card is demonstrably graded, and a
+  // raw quote understates it by an order of magnitude. Say we cannot read it
+  // and point at the grade ladder instead.
+  const slabGradeUnknown = Boolean(scan.slab) && !Number.isFinite(n);
   // a slabbed card is worth its GRADED price — raw is the wrong number for it
   const slabValue =
     scan.slab && g && Number.isFinite(n)
@@ -1436,7 +1443,7 @@ function priceView(scan: Scan): PriceView {
   // A raw card is worth its raw market price. There is no condition
   // adjustment any more — we stopped grading, so there is no grade to
   // discount by, and inventing one turned an $84 card into $21.
-  const headline = slabValue ?? raw ?? null;
+  const headline = slabGradeUnknown ? null : (slabValue ?? raw ?? null);
   // graded comps and conditionAdjusted are always USD; only `raw` can be EUR
   const headlineUnit = slabValue != null ? "USD" : headline === raw ? rawUnit : "USD";
   const slabCompany = scan.slab?.company ?? null;
@@ -1472,6 +1479,7 @@ function priceView(scan: Scan): PriceView {
     headline,
     headlineUnit,
     headlineLabel,
+    slabGradeUnknown,
     raw,
     rawUnit,
     grades,
@@ -1646,7 +1654,18 @@ function PriceHero({ scan }: { scan: Scan }) {
         <CurrencyPicker />
       </div>
 
-      {hasAny ? (
+      {pv.slabGradeUnknown ? (
+        <div className="ph-figure">
+          <div className="label-mono accent-text">GRADE NOT READABLE</div>
+          <div className="ph-price ph-price-none">—</div>
+          <p className="muted small" style={{ margin: "0 0 4px" }}>
+            This is a <b>{scan.slab?.company}</b> slab, but the grade on the label
+            couldn&apos;t be read from this photo — so we won&apos;t quote a price for it.
+            A raw price would understate a graded card badly. Pick the grade below to
+            see what it sells for, or re-shoot with the full label in focus.
+          </p>
+        </div>
+      ) : hasAny ? (
         <>
           <div className="ph-figure">
             <div className="label-mono accent-text">

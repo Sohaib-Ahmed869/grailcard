@@ -76,7 +76,10 @@ def parse_slab(texts: list) -> dict | None:
     # away every label whose grade is a bare number ("SGC 88", "TAG 9.8") and
     # every sub-brand it had no pattern for.
     tup = extract_slab(joined)
-    if tup.reason and not tup.is_slab:
+    # Only a POSITIVE non-slab verdict vetoes. "No pattern matched" must not:
+    # a PSA label with the grade digit obscured is still a PSA label, and
+    # discarding it sent a Deoxys ex #93 to a POP Series 4 #2.
+    if tup.declined:
         return None
 
     company = _SLAB_COMPANIES.search(joined)

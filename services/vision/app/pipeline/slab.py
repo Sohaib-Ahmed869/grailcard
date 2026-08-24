@@ -63,6 +63,12 @@ class SlabRead:
     tier: str | None = None
     is_slab: bool = False
     reason: str | None = None         # why we declined, when we decline
+    # True only when we POSITIVELY determined this is not a slab (a lot, a
+    # seller's opinion, a Raw Card Review). Failing to find a grade is NOT the
+    # same thing and must not be treated as one: a PSA label whose grade digit
+    # is obscured is still a PSA label, and discarding it drops the card to
+    # fuzzy name matching.
+    declined: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -103,15 +109,15 @@ def extract(text: str) -> SlabRead:
 
     # ── guards first: nothing below should get the chance to fire ───────────
     if _NEGATIVE.search(U):
-        return SlabRead(reason="seller opinion, not a certification")
+        return SlabRead(reason="seller opinion, not a certification", declined=True)
     if _LOT.search(U):
-        return SlabRead(reason="multi-card lot")
+        return SlabRead(reason="multi-card lot", declined=True)
     # "Raw Card Review" is an opinion in a sleeve, not a tamper-evident holder
     if re.search(r"\bB?RCR\b|\bRAW\s*CARD\s*REVIEW\b", U):
-        return SlabRead(reason="Beckett Raw Card Review is not a slab")
+        return SlabRead(reason="Beckett Raw Card Review is not a slab", declined=True)
     # a grade immediately questioned is a guess: "GEM MINT 10?"
     if re.search(r"\b(?:10|9(?:\.5)?|[1-8](?:\.5)?)\s*\?", U):
-        return SlabRead(reason="grade is speculative")
+        return SlabRead(reason="grade is speculative", declined=True)
 
     cert = _CERT.search(t)
     cert_s = cert.group(1) if cert else None
@@ -124,6 +130,22 @@ def extract(text: str) -> SlabRead:
             got.is_slab = True
             return got
 
+    named = re.search(r"\b(PSA|BGS|BECKETT|BVG|BCCG|CGC|SGC|TAG|ACE|AGS)\b", U)
+    if named or cert_s:
+        grader = named.group(1).upper() if named else None
+        if grader == "BECKETT":
+            grader = "BGS"
+        # A slab we can see but whose grade we cannot read. Say so: the grader
+        # and cert are still useful for identification, and a null grade stops
+        # anything downstream pricing it at a grade we never actually read.
+        return SlabRead(
+            grader=grader,
+            grade=None,
+            cert=cert_s,
+            tier=TIERS.get(grader or "", None),
+            is_slab=True,
+            reason="grade not readable on this label",
+        )
     return SlabRead(cert=cert_s, reason="no grader/grade pattern matched")
 
 
