@@ -11,6 +11,7 @@ import { estimateGradedFromRaw, fetchCardGraderMarket } from "./cardgrader.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
+import { writeGradePrices } from "../cards.store.js";
 import {
   identifyDigimon,
   identifyLorcana,
@@ -489,6 +490,30 @@ export class ScansService {
         if (g.psa10 != null) psa["10"] = { price: g.psa10 };
       }
       if (Object.keys(psa).length > 0) scan.valuation.pricesByGrader = { PSA: psa };
+
+      // Persist under the composite key so the grader survives storage. Until
+      // this table existed the schema had psa8/psa9/psa10 columns and no
+      // grader dimension at all, which is why a Beckett card could only ever
+      // be shown a PSA figure — there was nowhere else to read one from.
+      const catalogId = scan.identification?.cardId;
+      if (catalogId && catalogId !== "llm" && catalogId !== "described") {
+        void writeGradePrices(
+          catalogId,
+          Object.entries(psa).map(([grade, pt]) => ({
+            grader: "PSA",
+            grade: Number(grade),
+            tier: "premium",
+            price: pt.price ?? null,
+            sampleSize: pt.count ?? null,
+            confidence: pt.confidence ?? null,
+            method: pt.method ?? null,
+            low: pt.low ?? null,
+            high: pt.high ?? null,
+            median: pt.median ?? null,
+            source: scan.valuation?.graded?.source ?? "unknown",
+          })),
+        );
+      }
     }
     // the grader and grade as read off the label, so the UI never re-derives
     // them from a display string

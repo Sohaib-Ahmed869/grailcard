@@ -95,6 +95,44 @@ CREATE TABLE IF NOT EXISTS card_prices (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- One row per (card, grader, grade, qualifier, label). This is the composite
+-- key: a price is meaningless without the company that issued the grade.
+--
+-- The columns on card_prices above are psa8/psa9/psa10 — a shape that cannot
+-- represent a Beckett 9.5 at all, which is how a BGS card came to be shown
+-- with a PSA figure. Here a Beckett price simply occupies a BGS row, and if we
+-- hold no Beckett data for a card there is no row: the query returns nothing,
+-- rather than the nearest PSA number wearing a Beckett label.
+CREATE TABLE IF NOT EXISTS grade_prices (
+  catalog_id     TEXT        NOT NULL,   -- our catalog id, e.g. ex15-100
+  grader         TEXT        NOT NULL,   -- PSA | BGS | BVG | BCCG | CGC | SGC | TAG …
+  grade          NUMERIC(3,1) NOT NULL,  -- 8, 8.5, 9, 10 — half grades are real
+  qualifier      TEXT        NOT NULL DEFAULT '',  -- PSA OC/ST/MK/PD/MC
+  label_variant  TEXT        NOT NULL DEFAULT '',  -- black | gold | pristine | gem
+  tier           TEXT,                   -- premium | emerging | discount
+
+  price          NUMERIC(12,2),
+  sample_size    INTEGER,
+  confidence     TEXT,                   -- high | medium | low
+  method         TEXT,                   -- how the source computed it
+  low            NUMERIC(12,2),
+  high           NUMERIC(12,2),
+  median         NUMERIC(12,2),          -- unfiltered, for sanity-checking
+  currency       CHAR(3)     NOT NULL DEFAULT 'USD',
+
+  source         TEXT        NOT NULL,
+  last_sale_at   TIMESTAMPTZ,
+  fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- qualifier and label_variant default to '' rather than NULL so the primary
+  -- key actually constrains: in Postgres NULL never equals NULL, and a
+  -- nullable key column would let duplicate rows accumulate silently.
+  PRIMARY KEY (catalog_id, grader, grade, qualifier, label_variant)
+);
+
+CREATE INDEX IF NOT EXISTS grade_prices_lookup_idx ON grade_prices (catalog_id, grader);
+CREATE INDEX IF NOT EXISTS grade_prices_fetched_idx ON grade_prices (fetched_at DESC);
+
 CREATE INDEX IF NOT EXISTS card_prices_provider_card_id_idx ON card_prices (provider_card_id);
 CREATE INDEX IF NOT EXISTS card_prices_name_idx             ON card_prices (lower(card_name));
 CREATE INDEX IF NOT EXISTS card_prices_set_number_idx       ON card_prices (lower(set_name), card_number);
@@ -288,6 +326,105 @@ export async function writeCard(c: CardWrite): Promise<void> {
     );
   } catch (err) {
     console.warn(`[store] write failed for "${c.cacheKey}": ${(err as Error).message}`);
+  }
+}
+
+export type GradeRow = {
+  grader: string;
+  grade: number;
+  qualifier?: string | null;
+  labelVariant?: string | null;
+  tier?: string | null;
+  price: number | null;
+  sampleSize?: number | null;
+  confidence?: string | null;
+  method?: string | null;
+  low?: number | null;
+  high?: number | null;
+  median?: number | null;
+  source: string;
+  lastSaleAt?: string | null;
+};
+
+/** Persist prices under the composite key. Best-effort like everything here. */
+export async function writeGradePrices(
+  catalogId: string,
+  rows: GradeRow[],
+): Promise<void> {
+  if (!catalogId || rows.length === 0) return;
+  if (!usable || !(await initStore())) return;
+  const p = getPool();
+  if (!p) return;
+  try {
+    for (const r of rows) {
+      await p.query(
+        `INSERT INTO grade_prices (
+           catalog_id, grader, grade, qualifier, label_variant, tier,
+           price, sample_size, confidence, method, low, high, median,
+           source, last_sale_at, fetched_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+         ON CONFLICT (catalog_id, grader, grade, qualifier, label_variant) DO UPDATE SET
+           tier = excluded.tier,
+           price = excluded.price,
+           sample_size = excluded.sample_size,
+           confidence = excluded.confidence,
+           method = excluded.method,
+           low = excluded.low, high = excluded.high, median = excluded.median,
+           source = excluded.source,
+           last_sale_at = COALESCE(excluded.last_sale_at, grade_prices.last_sale_at),
+           fetched_at = now()`,
+        [
+          catalogId, r.grader, r.grade, r.qualifier ?? "", r.labelVariant ?? "",
+          r.tier ?? null, r.price, r.sampleSize ?? null, r.confidence ?? null,
+          r.method ?? null, r.low ?? null, r.high ?? null, r.median ?? null,
+          r.source, r.lastSaleAt ?? null,
+        ],
+      );
+    }
+  } catch (err) {
+    console.warn(`[store] grade_prices write failed for ${catalogId}: ${(err as Error).message}`);
+  }
+}
+
+/** Everything we hold for a card, grouped by the company that graded it.
+ *  A grader with no data is simply absent — never substituted. */
+export async function readGradePrices(
+  catalogId: string,
+  maxAgeMs: number,
+): Promise<Record<string, Record<string, GradeRow>> | null> {
+  if (!catalogId || !usable || !(await initStore())) return null;
+  const p = getPool();
+  if (!p) return null;
+  try {
+    const { rows } = await p.query(
+      `SELECT * FROM grade_prices
+       WHERE catalog_id = $1 AND fetched_at > now() - ($2::bigint * interval '1 millisecond')`,
+      [catalogId, Math.round(maxAgeMs)],
+    );
+    if (rows.length === 0) return null;
+    const out: Record<string, Record<string, GradeRow>> = {};
+    for (const r of rows) {
+      const grader = String(r.grader);
+      const grade = String(Number(r.grade));
+      (out[grader] ??= {})[grade] = {
+        grader,
+        grade: Number(r.grade),
+        qualifier: r.qualifier || null,
+        labelVariant: r.label_variant || null,
+        tier: r.tier ?? null,
+        price: n(r.price),
+        sampleSize: r.sample_size ?? null,
+        confidence: r.confidence ?? null,
+        method: r.method ?? null,
+        low: n(r.low), high: n(r.high), median: n(r.median),
+        source: String(r.source),
+        lastSaleAt: r.last_sale_at ? new Date(r.last_sale_at).toISOString() : null,
+      };
+    }
+    return out;
+  } catch (err) {
+    console.warn(`[store] grade_prices read failed for ${catalogId}: ${(err as Error).message}`);
+    return null;
   }
 }
 
