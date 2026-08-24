@@ -125,6 +125,30 @@ def run_pipeline(
             "overlayImageB64": overlay_b64,
         }
 
+    # A card already in a grading slab has been graded by a professional, in
+    # hand, out of the case. Anything we produce is a guess made through
+    # scratched acrylic under whatever light the photo was taken in — on a
+    # Beckett 8.5 it reported 51 surface marks, which is not a defensible
+    # claim about someone else's certified card. Worse, our number sitting
+    # beside their grade invites a comparison we have no standing to make.
+    #
+    # So for slabbed cards we read the label and price it, and offer no grade,
+    # no subgrades and no surface findings. Raw cards are unaffected — that is
+    # where a measurement is actually useful.
+    if (ocr or {}).get("slab"):
+        return {
+            "ok": True,
+            "quality": _quality_dict(gate.quality),
+            "rejection": None,
+            "measurement": None,
+            "grade": None,
+            "gradingSkipped": "slabbed",
+            "authenticity": digital_source_check(det.warped),
+            "ocr": ocr,
+            "warpedImageB64": _b64_png(det.warped) if include_images else None,
+            "overlayImageB64": None,
+        }
+
     cen = measure_centering(det.warped)
     grade = compute_grade(
         det.warped, cen, low_detail=gate.quality.low_detail, bg_color=det.bg_color

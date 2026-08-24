@@ -1570,8 +1570,9 @@ function Result({ scan }: { scan: Scan }) {
             </span>
           )}
           <p className="muted" style={{ margin: "8px 0 0" }}>
-            This card is already professionally graded — the label grade is authoritative.
-            Any estimate below was made through the slab plastic and should be ignored.{" "}
+            This card is already professionally graded, so we don&apos;t grade it ourselves —
+            a condition opinion formed through the case would add nothing to the certified
+            grade on the label. We read the label and value the card at that grade.{" "}
             {scan.slab.verifyUrl && (
               <a href={scan.slab.verifyUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
                 Verify this cert on {scan.slab.company}&apos;s registry →

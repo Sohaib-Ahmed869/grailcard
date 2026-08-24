@@ -87,9 +87,25 @@ def parse_slab(texts: list) -> dict | None:
     if company:
         raw_company = _COMPANY_ALIAS.get(company.group(1).upper(), company.group(1).upper())
     else:
-        # company logo often doesn't OCR — cert length is a strong tell:
-        # BGS certs run to 10 digits, PSA are 8-9
-        raw_company = "BGS" if cert and len(cert.group(1)) == 10 else "PSA"
+        # The company logo frequently fails to OCR, and defaulting to PSA
+        # printed "PSA" on Beckett slabs — a claim about someone else's
+        # certification that we had no evidence for.
+        #
+        # Beckett labels carry a signature PSA labels never do: the four
+        # subgrade captions, and a "+" suffix on the grade word. Those are read
+        # far more reliably than the logo. Cert length is the last resort, and
+        # when nothing indicates a company we now say so instead of guessing.
+        beckett_markers = sum(
+            1 for w in ("CENTERING", "CORNERS", "EDGES", "SURFACE") if w in joined.upper()
+        )
+        if beckett_markers >= 2 or re.search(r"\bNM[-\s]?MT\s*\+", joined, re.IGNORECASE):
+            raw_company = "BGS"
+        elif cert and len(cert.group(1)) == 10:
+            raw_company = "BGS"
+        elif cert and len(cert.group(1)) in (8, 9):
+            raw_company = "PSA"
+        else:
+            raw_company = "UNKNOWN"
     # The label is the answer key: year + set + collector number identify a
     # graded card exactly, with no fuzzy name matching needed. Harvesting it
     # is the difference between "Charizard, some set" and one specific card.
