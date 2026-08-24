@@ -505,13 +505,11 @@ export class ScansService {
       scan.valuation?.tcgplayer?.market ??
       scan.valuation?.cardmarket?.trend ??
       scan.valuation?.webEstimate?.value;
-    if (scan.valuation && scan.grade && nmPrice != null) {
-      const multiplier = conditionMultiplier(scan.grade.overall);
-      scan.valuation.conditionAdjusted = {
-        value: Math.round(nmPrice * multiplier * 100) / 100,
-        multiplier,
-      };
-    }
+    // conditionAdjusted is gone with the grade that produced it. Discounting a
+    // market price by our own condition opinion turned an $84 card into $21 on
+    // the strength of a 2.5 the heuristics should never have issued. Raw cards
+    // are now quoted at the raw market price, which is what that price is.
+    void conditionMultiplier; // retained for reference; no longer applied
 
     // a slabbed card is already professionally graded — say so, link the cert,
     // and mark our through-the-plastic estimate as non-authoritative

@@ -191,7 +191,13 @@ def run_pipeline(
             "overlayImageB64": None,
         }
 
-    if slab_read:
+    # We no longer issue a condition grade for ANY card, slabbed or raw.
+    # For a slab it was second-guessing a professional; for a raw card the
+    # heuristics were producing a 2.5 off 69 "surface marks" on a clean card
+    # and then multiplying the market price by 0.25, turning an $84 card into
+    # $21. Detection quality is not good enough to move money, so it does not.
+    # We identify the card, read any grading label, and price it.
+    if True:
         return {
             "ok": True,
             "quality": _quality_dict(gate.quality),

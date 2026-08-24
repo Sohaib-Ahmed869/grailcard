@@ -54,14 +54,19 @@ def test_scratch_lowers_surface_grade():
     assert g_scr.surface.value < g_clean.surface.value
 
 
-def test_pipeline_carries_grade_and_authenticity():
+def test_pipeline_issues_no_grade():
+    """We identify and price cards; we do not grade them.
+
+    compute_grade still exists and is still tested above — it is simply no
+    longer wired into the pipeline. The heuristics were not good enough to move
+    money: they scored a clean card 2.5 on 69 phantom "surface marks", and that
+    grade was then multiplying the market price by 0.25.
+    """
     result = run_pipeline(make_card_photo(lr=60, tb=45))
     assert result["ok"] is True
-    g = result["grade"]
-    assert 1.0 <= g["overall"] <= 10.0
-    assert g["band"]["low"] <= g["overall"] <= g["band"]["high"]
-    assert set(g["subgrades"]) == {"centering", "corners", "edges", "surface"}
-    assert g["method"] == "heuristic-v0"
+    assert result["grade"] is None
+    assert result["measurement"] is None
+    # authenticity is a property of the image, not a condition opinion — kept
     assert result["authenticity"] is not None
     assert "digitalLikely" in result["authenticity"]
 

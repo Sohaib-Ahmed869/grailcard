@@ -1434,11 +1434,12 @@ function priceView(scan: Scan): PriceView {
     ? scan.recommendation?.rows?.find((r) => r.grade === likely)?.value ?? null
     : null;
 
-  const headline =
-    slabValue ?? v?.conditionAdjusted?.value ?? raw ?? likelyValue ?? null;
+  // A raw card is worth its raw market price. There is no condition
+  // adjustment any more — we stopped grading, so there is no grade to
+  // discount by, and inventing one turned an $84 card into $21.
+  const headline = slabValue ?? raw ?? null;
   // graded comps and conditionAdjusted are always USD; only `raw` can be EUR
-  const headlineUnit =
-    slabValue != null || v?.conditionAdjusted != null ? "USD" : headline === raw ? rawUnit : "USD";
+  const headlineUnit = slabValue != null ? "USD" : headline === raw ? rawUnit : "USD";
   const slabCompany = scan.slab?.company ?? null;
   // Every graded comp we can buy is a PSA sale. For a Beckett or CGC slab we
   // are therefore quoting the nearest PSA tier, not a sale of this card in
@@ -1451,13 +1452,9 @@ function priceView(scan: Scan): PriceView {
     ? crossGrader
       ? `${scan.slab!.company} ${scan.slab!.gradeText} — priced at the nearest PSA tier`
       : `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
-    : v?.conditionAdjusted
-      ? "this copy, raw, at our estimated grade"
-      : raw != null
-        ? "near-mint market price, ungraded"
-        : likelyValue != null
-          ? `if it grades ${likely}`
-          : "no market price found";
+    : raw != null
+      ? "raw, ungraded market price"
+      : "no market price found";
 
   const grades = g
     ? ([["PSA 10", g.psa10, 10], ["PSA 9", g.psa9, 9], ["PSA 8", g.psa8, 8]] as const).map(
@@ -1720,7 +1717,9 @@ function PriceHero({ scan }: { scan: Scan }) {
             </li>
           ) : (
             <li>
-              <b>No grading label found</b> — priced as a raw, ungraded copy.
+              <b>No grading label found</b> — priced as a raw, ungraded copy. We
+              don&apos;t judge this card&apos;s condition, so the figure is the market
+              price for the card, not for this particular copy.
             </li>
           )}
           <li>
