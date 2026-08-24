@@ -475,13 +475,20 @@ export class ScansService {
       }
     }
 
-    const rawForEst =
-      scan.valuation?.tcgplayer?.market ??
-      scan.valuation?.cardmarket?.trend ??
-      scan.valuation?.webEstimate?.value;
-    if (scan.valuation && !scan.valuation.graded && rawForEst != null && rawForEst > 0) {
-      scan.valuation.graded = estimateGradedFromRaw(rawForEst);
-    }
+    // estimateGradedFromRaw is gone from the chain.
+    //
+    // It multiplied a raw price by a fixed constant to invent graded figures
+    // where no sales existed. On a BGS 9.5 One Piece card that reported A$16.66
+    // against a real market around A$1,750 — because our graded-price source
+    // covers Pokemon only, so every One Piece, Magic, Yu-Gi-Oh and Lorcana card
+    // fell through to the multiplier and got a number with no evidence behind
+    // it whatsoever.
+    //
+    // Where we hold no sales for a card at its grade the correct answer is to
+    // say so. The live listings panel still shows what the market is asking,
+    // which is real data, and the interface names the gap instead of filling
+    // it with arithmetic.
+    void estimateGradedFromRaw;
 
     // Separate the graded prices by the company that actually issued them.
     // Everything we can buy today is PSA sale data, so PSA is the only key that

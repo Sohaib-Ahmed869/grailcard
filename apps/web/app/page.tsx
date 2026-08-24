@@ -1659,7 +1659,18 @@ function PriceHero({ scan }: { scan: Scan }) {
         <CurrencyPicker />
       </div>
 
-      {pv.slabGradeUnknown ? (
+      {scan.slab && !pv.slabGradeUnknown && pv.headline == null ? (
+        <div className="ph-figure">
+          <div className="label-mono accent-text">NO SALES DATA FOR THIS GRADE</div>
+          <div className="ph-price ph-price-none">—</div>
+          <p className="muted small" style={{ margin: 0 }}>
+            This is a <b>{scan.slab.company} {scan.slab.gradeText}</b>, and we hold no
+            completed sales for it. Our graded-sales source covers Pokémon only, so cards
+            from other games have no sold comps here yet. The live listings below are real
+            asking prices for this card — the closest signal we can honestly give you.
+          </p>
+        </div>
+      ) : pv.slabGradeUnknown ? (
         <div className="ph-figure">
           <div className="label-mono accent-text">GRADE NOT READABLE</div>
           <div className="ph-price ph-price-none">—</div>
