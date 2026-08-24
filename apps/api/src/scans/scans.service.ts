@@ -12,6 +12,14 @@ import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
 import { writeGradePrices } from "../cards.store.js";
+
+// Mirrors TIERS in services/vision/app/pipeline/slab.py. Never price across
+// tiers: a BCCG 10 and a BGS 10 are not comparable goods.
+const GRADER_TIER: Record<string, string> = {
+  PSA: "premium", BGS: "premium", BVG: "premium", CGC: "premium", SGC: "premium",
+  TAG: "emerging", ACE: "emerging", AGS: "emerging", MNT: "emerging",
+  BCCG: "discount", GMA: "discount", KSA: "discount", HGA: "discount", CSG: "discount",
+};
 import {
   identifyDigimon,
   identifyLorcana,
@@ -381,6 +389,7 @@ export class ScansService {
     // the same Gold Star priced fine from its slab photo and blank from a
     // hand-held one.
     let pptByGrade: Record<string, GradePoint> | null = null;
+    let pptByGrader: Record<string, Record<string, GradePoint>> | null = null;
     const ident = scan.identification;
     if (
       ident &&
@@ -390,6 +399,7 @@ export class ScansService {
     ) {
       const ppt = await fetchGradedPrices(ident.name, ident.localId, ident.setName);
       pptByGrade = ppt.byGrade ?? null;
+      pptByGrader = ppt.byGrader ?? null;
       if (ppt.graded) {
         scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
         scan.valuation.graded = ppt.graded;
@@ -482,14 +492,17 @@ export class ScansService {
       // prefer the per-grade evidence from the provider (filtered price, sample
       // size, its own confidence); fall back to the bare number where a source
       // gives us nothing richer
-      const psa: Record<string, GradePoint> =
-        pptByGrade && Object.keys(pptByGrade).length ? { ...pptByGrade } : {};
-      if (!Object.keys(psa).length) {
+      // every grading company the source tracks, not just PSA
+      let byGrader: Record<string, Record<string, GradePoint>> =
+        pptByGrader && Object.keys(pptByGrader).length ? { ...pptByGrader } : {};
+      if (!Object.keys(byGrader).length) {
+        const psa: Record<string, GradePoint> = {};
         if (g.psa8 != null) psa["8"] = { price: g.psa8 };
         if (g.psa9 != null) psa["9"] = { price: g.psa9 };
         if (g.psa10 != null) psa["10"] = { price: g.psa10 };
+        if (Object.keys(psa).length) byGrader = { PSA: psa };
       }
-      if (Object.keys(psa).length > 0) scan.valuation.pricesByGrader = { PSA: psa };
+      if (Object.keys(byGrader).length > 0) scan.valuation.pricesByGrader = byGrader;
 
       // Persist under the composite key so the grader survives storage. Until
       // this table existed the schema had psa8/psa9/psa10 columns and no
@@ -497,12 +510,15 @@ export class ScansService {
       // be shown a PSA figure — there was nowhere else to read one from.
       const catalogId = scan.identification?.cardId;
       if (catalogId && catalogId !== "llm" && catalogId !== "described") {
+        const rows = Object.entries(byGrader).flatMap(([grader, grades]) =>
+          Object.entries(grades).map(([grade, pt]) => ({ grader, grade, pt })),
+        );
         void writeGradePrices(
           catalogId,
-          Object.entries(psa).map(([grade, pt]) => ({
-            grader: "PSA",
+          rows.map(({ grader, grade, pt }) => ({
+            grader,
             grade: Number(grade),
-            tier: "premium",
+            tier: GRADER_TIER[grader] ?? null,
             price: pt.price ?? null,
             sampleSize: pt.count ?? null,
             confidence: pt.confidence ?? null,

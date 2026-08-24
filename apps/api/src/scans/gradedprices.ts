@@ -33,9 +33,27 @@ export type GradePoint = {
 export type PptPrices = {
   graded: GradedPrices | null;
   rawUsd: number | null;
-  /** per-grade evidence, keyed by grade as written */
+  /** per-grade evidence for PSA, keyed by grade as written */
   byGrade?: Record<string, GradePoint> | null;
+  /** every grading company the source tracks: grader -> grade -> evidence */
+  byGrader?: Record<string, Record<string, GradePoint>> | null;
 };
+
+/** "bgs9_5" -> { grader: "BGS", grade: "9.5" }. Returns null for anything that
+ *  is not a grade key, and for "ungraded", which is a raw price and belongs on
+ *  its own field rather than under a grading company. */
+export function parseGradeKey(
+  key: string,
+): { grader: string; grade: string } | null {
+  const m = /^(psa|bgs|bvg|bccg|cgc|sgc|tag|ace|ags|mnt|gma|ksa|hga|csg)(\d{1,2})(?:_(\d))?$/i.exec(
+    key,
+  );
+  if (!m) return null;
+  const whole = Number(m[2]);
+  if (!Number.isFinite(whole) || whole < 1 || whole > 10) return null;
+  const grade = m[3] ? `${whole}.${m[3]}` : String(whole);
+  return { grader: m[1].toUpperCase(), grade };
+}
 
 // PPT bills 2 credits PER CARD RETURNED, so the page size IS the price of a
 // lookup: limit=10 cost 20 credits and burned a whole day's quota in five
@@ -409,10 +427,23 @@ export async function fetchGradedPrices(
       };
     };
 
+    // Read EVERY grade the provider tracks, not three PSA rungs.
+    //
+    // salesByGrade is keyed "psa9", "bgs9_5", "cgc10", "tag8_5", "ungraded" and
+    // so on. We were reading psa8/psa9/psa10 and discarding the rest, which is
+    // why a Beckett card had to be approximated from the nearest PSA tier when
+    // its actual BGS 9.5 sales were sitting in the same response — and why a
+    // PSA 5 card reported no data at all.
+    const byGrader: Record<string, Record<string, GradePoint>> = {};
     const byGrade: Record<string, GradePoint> = {};
-    for (const [key, grade] of [["psa8", "8"], ["psa9", "9"], ["psa10", "10"]] as const) {
-      const pt = point((ebay as any)[key]);
-      if (pt) byGrade[grade] = pt;
+    for (const [key, raw] of Object.entries(ebay as Record<string, any>)) {
+      const parsed = parseGradeKey(key);
+      if (!parsed) continue;
+      const pt = point(raw);
+      if (!pt) continue;
+      const { grader, grade } = parsed;
+      (byGrader[grader] ??= {})[grade] = pt;
+      if (grader === "PSA") byGrade[grade] = pt; // back-compat for the flat shape
     }
 
     const graded: GradedPrices = {
@@ -427,6 +458,7 @@ export async function fetchGradedPrices(
         graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded,
       rawUsd,
       byGrade: Object.keys(byGrade).length ? byGrade : null,
+      byGrader: Object.keys(byGrader).length ? byGrader : null,
     };
     cacheSet(cacheKey, result);
     // keep everything the provider returned, not just the three numbers we
