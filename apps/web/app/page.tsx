@@ -1369,6 +1369,11 @@ type PriceView = {
   raw: number | null;           // ungraded market, for context
   rawUnit: string;
   grades: { label: string; value: number | null; isSlab: boolean }[];
+  /** the company on the label, if any */
+  slabCompany: string | null;
+  /** true when the sale comps are from a DIFFERENT grader than the slab.
+   *  Our comps are PSA sales; a BGS or CGC card is being read across. */
+  crossGrader: boolean;
   verified: boolean;            // real sold comps vs our own estimate
   source: string | null;
 };
@@ -1408,8 +1413,18 @@ function priceView(scan: Scan): PriceView {
   // graded comps and conditionAdjusted are always USD; only `raw` can be EUR
   const headlineUnit =
     slabValue != null || v?.conditionAdjusted != null ? "USD" : headline === raw ? rawUnit : "USD";
+  const slabCompany = scan.slab?.company ?? null;
+  // Every graded comp we can buy is a PSA sale. For a Beckett or CGC slab we
+  // are therefore quoting the nearest PSA tier, not a sale of this card in
+  // this holder — and the two are not interchangeable. Say so rather than
+  // printing "PSA 8" over a Beckett 8.5.
+  const crossGrader = Boolean(
+    slabCompany && slabCompany !== "PSA" && slabCompany !== "UNKNOWN" && slabValue != null,
+  );
   const headlineLabel = slabValue
-    ? `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
+    ? crossGrader
+      ? `${scan.slab!.company} ${scan.slab!.gradeText} — priced at the nearest PSA tier`
+      : `in its ${scan.slab!.company} ${scan.slab!.gradeText} slab`
     : v?.conditionAdjusted
       ? "this copy, raw, at our estimated grade"
       : raw != null
@@ -1438,6 +1453,8 @@ function priceView(scan: Scan): PriceView {
     raw,
     rawUnit,
     grades,
+    slabCompany,
+    crossGrader,
     verified: Boolean(g && !g.estimated),
     source: g?.source ?? (v?.tcgplayer ? "tcgplayer" : v?.cardmarket ? "cardmarket" : null),
   };
@@ -1522,7 +1539,11 @@ function PriceHero({ scan }: { scan: Scan }) {
                 <div className={`ph-grade${row.isSlab ? " is-slab" : ""}`} key={row.label}>
                   <div className="ph-grade-label">
                     {row.label}
-                    {row.isSlab && <span className="ph-grade-you">this slab</span>}
+                    {row.isSlab && (
+                      <span className="ph-grade-you">
+                        {pv.crossGrader ? "closest tier" : "this slab"}
+                      </span>
+                    )}
                   </div>
                   <div className="ph-grade-value">
                     <Money v={row.value} showSource={false} />
@@ -1542,6 +1563,16 @@ function PriceHero({ scan }: { scan: Scan }) {
             links further down are the best pricing that exists for it right now.
           </p>
         </div>
+      )}
+
+      {pv.crossGrader && (
+        <p className="ph-crossnote muted small">
+          Sale comps available to us are <b>PSA</b> sales. This card is
+          certified by <b>{pv.slabCompany}</b>, so the figure above is the closest PSA
+          tier rather than a recorded sale of a {pv.slabCompany} {scan.slab?.gradeText}.
+          Beckett and PSA grades are not interchangeable — check the {pv.slabCompany} sold
+          listings below before pricing to sell.
+        </p>
       )}
 
       <div className="ph-foot muted small">

@@ -1578,3 +1578,13 @@ button.primary:disabled {
 .quota-pop {
   width: min(360px, calc(100vw - 32px));
 }
+
+/* shown when the sale comps come from a different grader than the slab */
+.ph-crossnote {
+  margin: 14px 0 0;
+  padding: 11px 13px;
+  border: 1px solid var(--amber);
+  border-radius: 12px;
+  background: var(--panel-2);
+  line-height: 1.55;
+}
