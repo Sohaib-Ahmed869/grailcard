@@ -10,7 +10,7 @@ import { normaliseVisionUrl } from "./visionurl.js";
 import { estimateGradedFromRaw, fetchCardGraderMarket } from "./cardgrader.js";
 import { identifyWithGemini } from "./gemini.js";
 import { fetchJustTcgPrice } from "./justtcg.js";
-import { fetchGradedPrices } from "./gradedprices.js";
+import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
 import {
   identifyDigimon,
   identifyLorcana,
@@ -379,6 +379,7 @@ export class ScansService {
     // catalog) reached the page with a correct card ID and no prices at all —
     // the same Gold Star priced fine from its slab photo and blank from a
     // hand-held one.
+    let pptByGrade: Record<string, GradePoint> | null = null;
     const ident = scan.identification;
     if (
       ident &&
@@ -387,6 +388,7 @@ export class ScansService {
       ident.cardId !== "described"
     ) {
       const ppt = await fetchGradedPrices(ident.name, ident.localId, ident.setName);
+      pptByGrade = ppt.byGrade ?? null;
       if (ppt.graded) {
         scan.valuation ??= { source: "tcgdex", tcgplayer: null, cardmarket: null };
         scan.valuation.graded = ppt.graded;
@@ -476,10 +478,16 @@ export class ScansService {
     // shows an empty Beckett tab rather than PSA numbers wearing a BGS badge.
     if (scan.valuation?.graded) {
       const g = scan.valuation.graded;
-      const psa: Record<string, number> = {};
-      if (g.psa8 != null) psa["8"] = g.psa8;
-      if (g.psa9 != null) psa["9"] = g.psa9;
-      if (g.psa10 != null) psa["10"] = g.psa10;
+      // prefer the per-grade evidence from the provider (filtered price, sample
+      // size, its own confidence); fall back to the bare number where a source
+      // gives us nothing richer
+      const psa: Record<string, GradePoint> =
+        pptByGrade && Object.keys(pptByGrade).length ? { ...pptByGrade } : {};
+      if (!Object.keys(psa).length) {
+        if (g.psa8 != null) psa["8"] = { price: g.psa8 };
+        if (g.psa9 != null) psa["9"] = { price: g.psa9 };
+        if (g.psa10 != null) psa["10"] = { price: g.psa10 };
+      }
       if (Object.keys(psa).length > 0) scan.valuation.pricesByGrader = { PSA: psa };
     }
     // the grader and grade as read off the label, so the UI never re-derives

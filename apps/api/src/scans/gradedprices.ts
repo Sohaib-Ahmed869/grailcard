@@ -20,7 +20,22 @@ function num(v: unknown): number | null {
   return null;
 }
 
-export type PptPrices = { graded: GradedPrices | null; rawUsd: number | null };
+export type GradePoint = {
+  price: number;
+  count?: number | null;
+  confidence?: "high" | "medium" | "low" | null;
+  method?: string | null;
+  low?: number | null;
+  high?: number | null;
+  median?: number | null;
+};
+
+export type PptPrices = {
+  graded: GradedPrices | null;
+  rawUsd: number | null;
+  /** per-grade evidence, keyed by grade as written */
+  byGrade?: Record<string, GradePoint> | null;
+};
 
 // PPT bills 2 credits PER CARD RETURNED, so the page size IS the price of a
 // lookup: limit=10 cost 20 credits and burned a whole day's quota in five
@@ -370,17 +385,48 @@ export async function fetchGradedPrices(
     // PPT nests per-grade sales under ebay.salesByGrade
     const ebay = (ebayRoot.salesByGrade ?? ebayRoot) as Record<string, unknown>;
 
+    // The provider publishes TWO figures per grade: a raw median and a
+    // filtered, recency-weighted "smart" price. The raw median is unfiltered,
+    // so a mistitled or damaged listing sits in it at full weight — on a
+    // Deoxys ex PSA 9 that dragged the median to $903 against a filtered
+    // $1,869, because the sample ran from $80 to $1,882 for the same card at
+    // the same grade. Prefer the filtered figure and keep the median beside it
+    // so the two can be compared.
+    const point = (g: any): GradePoint | null => {
+      if (!g) return null;
+      const smart = g.smartMarketPrice ?? null;
+      const price = num(smart?.price) ?? num(g.medianPrice) ?? num(g);
+      if (price == null) return null;
+      const conf = typeof smart?.confidence === "string" ? smart.confidence : null;
+      return {
+        price,
+        count: num(g.count),
+        confidence: (conf === "high" || conf === "medium" || conf === "low" ? conf : null),
+        method: typeof smart?.method === "string" ? smart.method : null,
+        low: num(g.minPrice),
+        high: num(g.maxPrice),
+        median: num(g.medianPrice),
+      };
+    };
+
+    const byGrade: Record<string, GradePoint> = {};
+    for (const [key, grade] of [["psa8", "8"], ["psa9", "9"], ["psa10", "10"]] as const) {
+      const pt = point((ebay as any)[key]);
+      if (pt) byGrade[grade] = pt;
+    }
+
     const graded: GradedPrices = {
       source: "pokemonpricetracker",
-      psa8: num(ebay.psa8),
-      psa9: num(ebay.psa9),
-      psa10: num(ebay.psa10),
+      psa8: byGrade["8"]?.price ?? null,
+      psa9: byGrade["9"]?.price ?? null,
+      psa10: byGrade["10"]?.price ?? null,
       estimated: false,
     };
     const result: PptPrices = {
       graded:
         graded.psa8 == null && graded.psa9 == null && graded.psa10 == null ? null : graded,
       rawUsd,
+      byGrade: Object.keys(byGrade).length ? byGrade : null,
     };
     cacheSet(cacheKey, result);
     // keep everything the provider returned, not just the three numbers we

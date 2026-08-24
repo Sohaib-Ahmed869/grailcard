@@ -135,9 +135,31 @@ export type GradedPrices = z.infer<typeof GradedPrices>;
  *
  *  Shape: { PSA: { "8": 14299, "9": 15125, "10": 58723 } }
  */
+/** One grade's worth of market evidence.
+ *
+ *  A bare number hides how much is behind it. The same "price" can be the
+ *  median of 400 sales or a single anecdote, and the reader cannot tell. Both
+ *  the sample size and the provider's own confidence travel with the figure.
+ */
+export const GradePoint = z.object({
+  price: z.number(),
+  /** how many completed sales the figure is drawn from */
+  count: z.number().nullish(),
+  /** the source's own rating of the figure */
+  confidence: z.enum(["high", "medium", "low"]).nullish(),
+  /** e.g. "90day_filtered_weighted" — how the source computed it */
+  method: z.string().nullish(),
+  /** raw spread of the underlying sales, before filtering */
+  low: z.number().nullish(),
+  high: z.number().nullish(),
+  /** unfiltered median, kept so a filtered figure can be sanity-checked */
+  median: z.number().nullish(),
+});
+export type GradePoint = z.infer<typeof GradePoint>;
+
 export const PricesByGrader = z.record(
-  z.string(),                       // grader: PSA | BGS | CGC | SGC | ...
-  z.record(z.string(), z.number()), // grade as written ("8", "9.5", "10")
+  z.string(),                    // grader: PSA | BGS | CGC | SGC | ...
+  z.record(z.string(), GradePoint), // grade as written ("8", "9.5", "10")
 );
 export type PricesByGrader = z.infer<typeof PricesByGrader>;
 

@@ -1742,3 +1742,28 @@ button.primary:disabled {
 
 /* a slot is focusable so a paste aimed at it lands there */
 .scan-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* evidence line under each grade tile */
+.ph-grade-eviq {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.eviq-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.eviq-high { background: var(--green); }
+.eviq-medium { background: var(--amber); }
+.eviq-low { background: var(--red); }
+.eviq-thin { color: var(--red); font-weight: 700; }
+
+.ph-grade-warn {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--red);
+}

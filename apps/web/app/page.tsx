@@ -110,7 +110,21 @@ type Scan = {
       avg30?: number | null;
     } | null;
     conditionAdjusted?: { value: number; multiplier: number } | null;
-    pricesByGrader?: Record<string, Record<string, number>> | null;
+    pricesByGrader?: Record<
+      string,
+      Record<
+        string,
+        {
+          price: number;
+          count?: number | null;
+          confidence?: "high" | "medium" | "low" | null;
+          method?: string | null;
+          low?: number | null;
+          high?: number | null;
+          median?: number | null;
+        }
+      >
+    > | null;
     slabGrader?: string | null;
     slabGrade?: number | null;
     variant?: string | null;
@@ -1554,6 +1568,8 @@ function GraderTabs({ scan, pv }: { scan: Scan; pv: PriceView }) {
         <div className="ph-grades">
           {gradeKeys.map((k) => {
             const mine = active === slabGrader && k === slabGradeStr;
+            const pt = grades[k];
+            const thin = (pt.count ?? 0) > 0 && (pt.count as number) < 3;
             return (
               <div className={`ph-grade${mine ? " is-slab" : ""}`} key={k}>
                 <div className="ph-grade-label">
@@ -1561,8 +1577,26 @@ function GraderTabs({ scan, pv }: { scan: Scan; pv: PriceView }) {
                   {mine && <span className="ph-grade-you">this card</span>}
                 </div>
                 <div className="ph-grade-value">
-                  <Money v={grades[k]} showSource={false} />
+                  <Money v={pt.price} showSource={false} />
                 </div>
+                {/* the figure alone hides how much is behind it: the same
+                    number can be 400 sales or a single anecdote */}
+                <div className="ph-grade-eviq">
+                  {pt.count != null && (
+                    <span className={thin ? "eviq-thin" : undefined}>
+                      {pt.count === 1 ? "1 sale" : `${pt.count} sales`}
+                    </span>
+                  )}
+                  {pt.confidence && (
+                    <span className={`eviq-dot eviq-${pt.confidence}`} title={`${pt.confidence} confidence`} />
+                  )}
+                  {pt.confidence && <span>{pt.confidence}</span>}
+                </div>
+                {thin && (
+                  <div className="ph-grade-warn">
+                    Too few sales to be a market price — treat as an anecdote.
+                  </div>
+                )}
               </div>
             );
           })}
