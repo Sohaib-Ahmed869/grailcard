@@ -767,7 +767,6 @@ function GradePanel({ scan }: { scan: Scan }) {
       {scan.summary && (
         <p style={{ margin: "14px 0 8px", lineHeight: 1.65 }}>{scan.summary}</p>
       )}
-      <FindingsLine scan={scan} />
       {g.notes.map((n) => (
         <div key={n} className="muted small">
           {n}
@@ -1565,7 +1564,14 @@ function GraderTabs({ scan, pv }: { scan: Scan; pv: PriceView }) {
         <div className="ph-grades">
           {gradeKeys.map((k) => {
             const mine = active === slabGrader && k === slabGradeStr;
-            const pt = grades[k];
+            // Accept either a bare number or a GradePoint. A browser holding
+            // an older bundle against a newer API rendered $NaN otherwise, and
+            // a price that says NaN is worse than one that is slightly stale.
+            const rawPt = grades[k] as unknown;
+            const pt =
+              typeof rawPt === "number"
+                ? { price: rawPt as number, count: null, confidence: null }
+                : (rawPt as { price: number; count?: number | null; confidence?: "high" | "medium" | "low" | null });
             const thin = (pt.count ?? 0) > 0 && (pt.count as number) < 3;
             return (
               <div className={`ph-grade${mine ? " is-slab" : ""}`} key={k}>
@@ -1777,7 +1783,6 @@ function Result({ scan }: { scan: Scan }) {
         </div>
       )}
       <IdentityPanel scan={scan} />
-      <GradePanel scan={scan} />
       {/* "should you grade this?" is a question about a raw card. For one
           already in a slab there is no decision to make, and showing a
           grade/don't-grade verdict beside someone else's certification reads
@@ -1787,20 +1792,12 @@ function Result({ scan }: { scan: Scan }) {
 
       {scan.status === "rejected" && scan.rejection ? (
         <div className="result-grid">
-          {scan.grade && <Viewer scan={scan} />}
           <div>
             <div className="panel">
               <span className="badge warn">not graded — no charge</span>
               <h3>{scan.rejection.userMessage}</h3>
               <p className="muted">{scan.rejection.retryHint}</p>
-              {scan.grade && (
-                <p className="muted small">
-                  The detection view shows what the provisional impression is based on —
-                  every box and ring is visible even on a rejected photo.
-                </p>
-              )}
             </div>
-            {scan.grade && <FindingsLine scan={scan} />}
           </div>
         </div>
       ) : (

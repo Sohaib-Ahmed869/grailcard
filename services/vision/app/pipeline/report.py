@@ -104,60 +104,21 @@ def run_pipeline(
                     ocr = {**ocr, k: full_reading[k]}
 
     if gate.rejection is not None:
-        # the photo failed the gate, but if a card was detected we can still
-        # offer a PROVISIONAL impression — clearly labeled, never charged,
-        # never sent to the paid grader
-        grade_dict = None
-        overlay_b64 = None
-        if det is not None:
-            cen = measure_centering(det.warped)
-            grade = compute_grade(det.warped, cen, low_detail=True, bg_color=det.bg_color)
-            _draw_findings(cen.overlay, grade.findings)
-            if include_images:
-                overlay_b64 = _b64_png(cen.overlay)
-            sub = lambda s: {"value": s.value, "confidence": round(s.confidence * 0.5, 2)} if s else None
-            grade_dict = {
-                "overall": grade.overall,
-                "band": {
-                    "low": max(1.0, grade.band_low - 1.0),
-                    "high": min(10.0, grade.band_high + 1.0),
-                },
-                "subgrades": {
-                    "centering": sub(grade.centering),
-                    "corners": sub(grade.corners),
-                    "edges": sub(grade.edges),
-                    "surface": sub(grade.surface),
-                },
-                "findings": grade.findings,
-                "method": "heuristic-v0-provisional",
-                "notes": [
-                    f"PROVISIONAL — this photo failed the quality gate ({gate.rejection['reason']}). "
-                    "Treat this as a rough impression, not an estimate; re-shoot for a real grade."
-                ]
-                + grade.notes,
-            }
+        # A rejected photo used to still return a "provisional" grade. We no
+        # longer grade at all, so there is nothing provisional to offer — the
+        # rejection and its retry hint are the whole answer.
         return {
             "ok": False,
             "quality": _quality_dict(gate.quality) if det is not None else None,
             "rejection": gate.rejection,
             "measurement": None,
-            "grade": grade_dict,
+            "grade": None,
             "authenticity": digital_source_check(det.warped) if det is not None else None,
             "ocr": ocr,
             "warpedImageB64": _b64_png(det.warped) if include_images and det else None,
-            "overlayImageB64": overlay_b64,
+            "overlayImageB64": None,
         }
 
-    # A card already in a grading slab has been graded by a professional, in
-    # hand, out of the case. Anything we produce is a guess made through
-    # scratched acrylic under whatever light the photo was taken in — on a
-    # Beckett 8.5 it reported 51 surface marks, which is not a defensible
-    # claim about someone else's certified card. Worse, our number sitting
-    # beside their grade invites a comparison we have no standing to make.
-    #
-    # So for slabbed cards we read the label and price it, and offer no grade,
-    # no subgrades and no surface findings. Raw cards are unaffected — that is
-    # where a measurement is actually useful.
     slab_read = (ocr or {}).get("slab")
 
     # A slab photo that is too degraded to read is worse than no answer. We no
