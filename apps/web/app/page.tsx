@@ -1779,11 +1779,102 @@ function PriceHero({ scan }: { scan: Scan }) {
   );
 }
 
+
+/* ── live listings ───────────────────────────────────────────────────────────
+   Shown in-product rather than as a link out. These are ASKS, not sales: the
+   sold medians above are the authority, and a card listed at $30,000 for eight
+   months is not a $30,000 card. Kept off the scan response so it does not add
+   latency to the number people are waiting for. */
+
+type Listing = {
+  title: string; price: number | null; currency: string; condition: string | null;
+  imageUrl: string | null; url: string; seller: string | null;
+  grader: string | null; grade: number | null;
+};
+
+function LiveListings({ scan }: { scan: Scan }) {
+  const id = scan.identification;
+  const v = scan.valuation;
+  const [data, setData] = useState<{ listings: Listing[]; total: number; filteredToGrade: boolean } | null>(null);
+  const [state, setState] = useState<"loading" | "done" | "error">("loading");
+
+  useEffect(() => {
+    if (!id?.name) { setState("done"); return; }
+    const q = new URLSearchParams({ name: id.name });
+    if (id.setName) q.set("set", id.setName);
+    if (id.localId) q.set("number", id.localId);
+    if (v?.slabGrader) q.set("grader", v.slabGrader);
+    if (v?.slabGrade != null) q.set("grade", String(v.slabGrade));
+    let alive = true;
+    fetch(`${API}/market/listings?${q}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!alive) return; setData(j); setState("done"); })
+      .catch(() => alive && setState("error"));
+    return () => { alive = false; };
+  }, [id?.name, id?.setName, id?.localId, v?.slabGrader, v?.slabGrade]);
+
+  const listings = data?.listings ?? [];
+  const label = v?.slabGrader && v?.slabGrade != null
+    ? `${v.slabGrader} ${String(v.slabGrade).replace(/\.0$/, "")}`
+    : null;
+
+  return (
+    <div className="panel">
+      <div className="listings-head">
+        <div>
+          <div className="label-mono accent-text">CURRENTLY LISTED</div>
+          <p className="note" style={{ margin: "4px 0 0" }}>
+            Live asking prices on eBay{data?.filteredToGrade && label ? <> for <b>{label}</b> copies</> : null}.
+            These are what sellers <b>want</b>, not what cards <b>sold</b> for — the valuation
+            above is drawn from completed sales.
+          </p>
+        </div>
+        {data && data.total > 0 && (
+          <span className="listings-count mono">{data.total} listed</span>
+        )}
+      </div>
+
+      {state === "loading" ? (
+        <p className="note" style={{ marginTop: 12 }}>Looking for live listings…</p>
+      ) : listings.length === 0 ? (
+        <p className="note" style={{ marginTop: 12 }}>
+          No live listings found for this card right now.
+        </p>
+      ) : (
+        <div className="listings">
+          {listings.slice(0, 8).map((l) => (
+            <a className="listing" key={l.url} href={l.url} target="_blank" rel="noreferrer">
+              {l.imageUrl ? (
+                <img src={l.imageUrl} alt="" loading="lazy" />
+              ) : (
+                <div className="listing-noimg" />
+              )}
+              <div className="listing-body">
+                <div className="listing-price">
+                  <Money v={l.price} unit={l.currency} showSource={false} />
+                </div>
+                <div className="listing-title">{l.title}</div>
+                <div className="listing-meta">
+                  {l.grader && l.grade != null && (
+                    <span className="listing-grade">{l.grader} {l.grade}</span>
+                  )}
+                  {l.condition && <span>{l.condition}</span>}
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Result({ scan }: { scan: Scan }) {
   const m = scan.measurement;
   return (
     <>
       <PriceHero scan={scan} />
+      <LiveListings scan={scan} />
       {scan.slab && (
         <div className="panel" style={{ borderColor: "var(--green)" }}>
           <span className="badge pass" style={{ fontSize: 16, padding: "6px 16px" }}>
