@@ -15,6 +15,8 @@ import re
 import cv2
 import numpy as np
 
+from .slab import extract as extract_slab
+
 _ENGINE = None
 
 COLLECTOR_RE = re.compile(r"\b(\d{1,3})\s*/\s*(\d{1,3})\b")
@@ -67,6 +69,16 @@ def parse_slab(texts: list) -> dict | None:
     the image (company name + condition wording + cert number)."""
     top_texts = [t for t in texts if t["top"] < 0.30]
     joined = " ".join(t["text"] for t in top_texts)
+
+    # The cascade decides whether this is a slab and what the grade tuple is.
+    # It runs FIRST and its verdict is final in both directions: the legacy
+    # gates below required grading WORDING plus a company or cert, which threw
+    # away every label whose grade is a bare number ("SGC 88", "TAG 9.8") and
+    # every sub-brand it had no pattern for.
+    tup = extract_slab(joined)
+    if tup.reason and not tup.is_slab:
+        return None
+
     company = _SLAB_COMPANIES.search(joined)
     # Take the best grade match, not the first. A Beckett label reads
     # "2006 EX DRAGON FRONTIERS ... NM-MT+ 8.5": the set-name "EX" appears
@@ -78,14 +90,17 @@ def parse_slab(texts: list) -> dict | None:
     if _cands:
         numbered = [m for m in _cands if m.group(2)]
         grade = max(numbered or _cands, key=lambda m: len(m.group(1)))
-    if not company and not grade:
-        return None
-    # require at least a condition phrase plus either company or cert
     cert = _CERT_RE.search(joined)
-    if not grade or not (company or cert):
-        return None
-    grade_text = grade.group(0).upper().strip()
-    if not grade.group(2):
+    if not tup.is_slab:
+        # cascade found no grader/grade; fall back to the legacy requirement of
+        # wording plus a company or cert before claiming this is a slab
+        if not grade or not (company or cert):
+            return None
+    grade_text = grade.group(0).upper().strip() if grade else ""
+    # legacy number recovery only applies to a legacy wording match. Where the
+    # cascade supplied the grade there is nothing to recover, and `grade` may
+    # legitimately be None ("SGC 88" carries no wording at all).
+    if grade is not None and not grade.group(2):
         # PSA prints the numeric grade huge, on its own line, so the number is
         # a separate token from the wording. Take the one NEAREST the grade
         # word rather than the first in the list: photos are often screenshots
@@ -225,8 +240,30 @@ def parse_slab(texts: list) -> dict | None:
         if c.upper() not in {x.upper() for x in candidates}:
             candidates.append(c)
 
+    # The authoritative read is the TUPLE from the cascade: it knows Beckett
+    # sub-brands, qualifiers, label colours, the SGC legacy scale and the
+    # negative guards, none of which a company+string pair can express.
+    # `company`/`gradeText` stay for now so existing callers keep working; they
+    # are removed in the composite-key phase.
+    if not tup.is_slab and tup.reason:
+        # the cascade positively identified this as NOT a slab (lot, seller
+        # opinion, raw-card review). That verdict beats the loose read above.
+        return None
+
+    if tup.is_slab and tup.grade is not None and not grade_text:
+        # no wording survived OCR ("SGC 88", "TAG 9.8") — show the tuple
+        grade_text = f"{tup.grader} {tup.grade:g}".strip()
+    if tup.qualifier and tup.qualifier not in grade_text:
+        grade_text = f"{grade_text} ({tup.qualifier})".strip()
+
     return {
-        "company": raw_company,
+        "company": tup.grader or raw_company,
+        "grader": tup.grader or raw_company,
+        "grade": tup.grade,
+        "qualifier": tup.qualifier,
+        "label": tup.label,
+        "subgrades": tup.subgrades or None,
+        "tier": tup.tier,
         "setCandidates": candidates,
         "gradeText": grade_text,
         "certNumber": cert.group(1) if cert else None,
