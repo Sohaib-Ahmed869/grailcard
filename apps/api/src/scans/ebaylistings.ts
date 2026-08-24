@@ -30,6 +30,11 @@ export type ListingResult = {
   query: string;
   /** true when we filtered to the card's own grader and grade */
   filteredToGrade: boolean;
+  /** median asking price of what survived filtering — a figure, not just a list.
+   *  Median rather than mean: one aspirational listing should not move it. */
+  medianAsk: number | null;
+  askLow: number | null;
+  askHigh: number | null;
 };
 
 const cache = new Map<string, { at: number; v: ListingResult }>();
@@ -85,7 +90,14 @@ export async function fetchListings(opts: {
   const limit = Math.min(opts.limit ?? 12, 24);
   // strip glyphs that break eBay's text search the same way they break ours
   const clean = (s: string) => s.replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
-  const parts = [clean(opts.name), opts.setName ? clean(opts.setName) : null];
+  // The card NUMBER is the single most valuable token in the query. Without it
+  // "Portgas.D.Ace Carrying On His Will BGS 9.5" returned a $28 Leader card
+  // from the same set; with "OP13-119" the same search returns the actual card
+  // at $900-$1,700, which is where its market really is.
+  const number = opts.number ? clean(opts.number) : null;
+  const parts = [clean(opts.name)];
+  if (number) parts.push(number);
+  else if (opts.setName) parts.push(clean(opts.setName));
   if (opts.grader && opts.grade != null) parts.push(`${opts.grader} ${opts.grade}`);
   const query = parts.filter(Boolean).join(" ");
 
@@ -100,7 +112,7 @@ export async function fetchListings(opts: {
     recordUsage("ebay");
     const url =
       `${EBAY}/buy/browse/v1/item_summary/search?q=${encodeURIComponent(query)}` +
-      `&limit=${limit}&sort=price`;
+      `&limit=${limit}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${tok}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
       signal: AbortSignal.timeout(15000),
@@ -127,12 +139,25 @@ export async function fetchListings(opts: {
       };
     });
 
-    // When we know the card's grade, surface listings for THAT grade first —
-    // a PSA 10 asking price tells the owner of a PSA 5 very little.
     let filtered = listings;
+
+    // Drop listings whose title carries a DIFFERENT card number. Sellers put the
+    // number in the title, so this is a cheap and reliable way to reject the
+    // wrong card from the right set — which is most of the noise.
+    if (number) {
+      const wanted = number.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const sameCard = listings.filter((l) => {
+        const t = l.title.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        return t.includes(wanted);
+      });
+      if (sameCard.length >= 2) filtered = sameCard;
+    }
+
+    // When we know the card's grade, surface listings for THAT grade —
+    // a PSA 10 asking price tells the owner of a PSA 5 very little.
     let filteredToGrade = false;
     if (opts.grader && opts.grade != null) {
-      const exact = listings.filter(
+      const exact = filtered.filter(
         (l) => l.grader === opts.grader && l.grade === opts.grade,
       );
       if (exact.length >= 2) {
@@ -140,12 +165,25 @@ export async function fetchListings(opts: {
         filteredToGrade = true;
       }
     }
+    filtered.sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+
+    const priced = filtered.filter((l) => l.price != null && l.url);
+    const values = priced.map((l) => l.price as number).sort((a, b) => a - b);
+    const median =
+      values.length === 0
+        ? null
+        : values.length % 2
+          ? values[(values.length - 1) / 2]
+          : (values[values.length / 2 - 1] + values[values.length / 2]) / 2;
 
     const v: ListingResult = {
-      listings: filtered.filter((l) => l.price != null && l.url),
-      total: Number(body.total ?? filtered.length),
+      listings: priced,
+      total: Number(body.total ?? priced.length),
       query,
       filteredToGrade,
+      medianAsk: median,
+      askLow: values[0] ?? null,
+      askHigh: values[values.length - 1] ?? null,
     };
     cache.set(key, { at: Date.now(), v });
     return v;

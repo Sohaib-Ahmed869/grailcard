@@ -1863,3 +1863,14 @@ button.primary:disabled {
 @media (max-width: 640px) {
   .listings { grid-template-columns: 1fr; }
 }
+
+/* median asking price — a figure alongside the listings, not just a count */
+.ask-figure { text-align: right; }
+.ask-figure .label-mono { font-size: 9.5px; letter-spacing: .14em; color: var(--muted); }
+.ask-price {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 22px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; color: var(--accent); line-height: 1.15;
+}
+.ask-range, .ask-count { font-size: 10px; color: var(--muted); }
+.ask-range { margin-top: 1px; }

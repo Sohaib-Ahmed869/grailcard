@@ -1806,7 +1806,10 @@ type Listing = {
 function LiveListings({ scan }: { scan: Scan }) {
   const id = scan.identification;
   const v = scan.valuation;
-  const [data, setData] = useState<{ listings: Listing[]; total: number; filteredToGrade: boolean } | null>(null);
+  const [data, setData] = useState<{
+    listings: Listing[]; total: number; filteredToGrade: boolean;
+    medianAsk: number | null; askLow: number | null; askHigh: number | null;
+  } | null>(null);
   const [state, setState] = useState<"loading" | "done" | "error">("loading");
 
   useEffect(() => {
@@ -1840,8 +1843,19 @@ function LiveListings({ scan }: { scan: Scan }) {
             above is drawn from completed sales.
           </p>
         </div>
-        {data && data.total > 0 && (
-          <span className="listings-count mono">{data.total} listed</span>
+        {data?.medianAsk != null && (
+          <div className="ask-figure">
+            <div className="label-mono">MEDIAN ASK</div>
+            <div className="ask-price">
+              <Money v={data.medianAsk} showSource={false} />
+            </div>
+            {data.askLow != null && data.askHigh != null && data.askLow !== data.askHigh && (
+              <div className="ask-range mono">
+                <Money v={data.askLow} showSource={false} /> – <Money v={data.askHigh} showSource={false} />
+              </div>
+            )}
+            <div className="ask-count mono">{data.listings.length} of {data.total} listed</div>
+          </div>
         )}
       </div>
 
