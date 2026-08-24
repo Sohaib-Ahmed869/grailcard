@@ -158,7 +158,40 @@ def run_pipeline(
     # So for slabbed cards we read the label and price it, and offer no grade,
     # no subgrades and no surface findings. Raw cards are unaffected — that is
     # where a measurement is actually useful.
-    if (ocr or {}).get("slab"):
+    slab_read = (ocr or {}).get("slab")
+
+    # A slab photo that is too degraded to read is worse than no answer. We no
+    # longer grade these cards, so blur and glare do not cost us a grade — they
+    # cost us the LABEL, and an unread label drops the card to fuzzy name
+    # matching, which is what put a Legendary Collection Charizard in Dragon
+    # Frontiers. If the photo looks like a slab but no label came back, decline
+    # and ask for a better one rather than guessing at four figures.
+    if not slab_read and room_for_a_label and (
+        gate.quality.glare_pct >= 2.0 or gate.quality.blur_score < 80.0
+    ):
+        return {
+            "ok": False,
+            "quality": _quality_dict(gate.quality),
+            "rejection": {
+                "reason": "label_unreadable",
+                "userMessage": (
+                    "This looks like a graded card, but the label on the holder "
+                    "couldn't be read."
+                ),
+                "retryHint": (
+                    "Shoot the slab flat-on with the whole label in frame, and tilt "
+                    "it slightly away from the light so the plastic doesn't glare."
+                ),
+            },
+            "measurement": None,
+            "grade": None,
+            "authenticity": None,
+            "ocr": ocr,
+            "warpedImageB64": None,
+            "overlayImageB64": None,
+        }
+
+    if slab_read:
         return {
             "ok": True,
             "quality": _quality_dict(gate.quality),

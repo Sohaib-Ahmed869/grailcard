@@ -1502,9 +1502,12 @@ function PriceHero({ scan }: { scan: Scan }) {
       {hasAny ? (
         <>
           <div className="ph-figure">
-            <div className="label-mono accent-text">ESTIMATED VALUE</div>
+            <div className="label-mono accent-text">
+              ESTIMATED VALUE{pv.crossGrader ? " · CROSS-GRADER ESTIMATE" : ""}
+            </div>
             <div className="ph-price">
               <Money v={pv.headline} unit={pv.headlineUnit} showSource={false} />
+              <span className="ph-est-tag">est.</span>
             </div>
             <div className="muted small ph-sub">
               {pv.headlineLabel}
@@ -1574,6 +1577,42 @@ function PriceHero({ scan }: { scan: Scan }) {
           listings below before pricing to sell.
         </p>
       )}
+
+      <div className="ph-method">
+        <div className="ph-method-title label-mono">HOW THIS NUMBER WAS REACHED</div>
+        <ol className="ph-method-list">
+          <li>
+            <b>Identified</b> the exact printing
+            {scan.identification?.setName ? ` — ${scan.identification.setName}` : ""}
+            {scan.identification?.localId ? ` #${scan.identification.localId}` : ""}.
+          </li>
+          {scan.slab ? (
+            <li>
+              <b>Read the grading label</b> — {scan.slab.company} {scan.slab.gradeText}
+              {scan.slab.certNumber ? `, cert ${scan.slab.certNumber}` : ""}. We do not
+              grade a card that is already certified.
+            </li>
+          ) : (
+            <li>
+              <b>No grading label found</b> — priced as a raw, ungraded copy.
+            </li>
+          )}
+          <li>
+            <b>Priced</b> from{" "}
+            {pv.verified
+              ? "completed sales of this card at this grade"
+              : "a calculated estimate, not recorded sales"}
+            {pv.crossGrader
+              ? `, using the nearest PSA tier because no ${pv.slabCompany} sales data is available to us`
+              : ""}
+            .
+          </li>
+        </ol>
+        <p className="muted small" style={{ margin: "8px 0 0" }}>
+          Every figure here is an <b>estimate of market value</b>, not an offer or an
+          appraisal. Confirm against the sold listings below before buying or selling.
+        </p>
+      </div>
 
       <div className="ph-foot muted small">
         Prices sourced in USD{scan.valuation?.cardmarket ? " and EUR" : ""}, converted to{" "}

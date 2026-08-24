@@ -1588,3 +1588,41 @@ button.primary:disabled {
   background: var(--panel-2);
   line-height: 1.55;
 }
+
+/* "est." rides with the headline figure so the number is never read as final */
+.ph-est-tag {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.3em;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  vertical-align: 0.9em;
+  margin-left: 8px;
+}
+
+/* the method trail — what we did, in the order we did it */
+.ph-method {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.ph-method-title {
+  font-size: 10px;
+  letter-spacing: .14em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.ph-method-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.ph-method-list b { color: var(--text); }
