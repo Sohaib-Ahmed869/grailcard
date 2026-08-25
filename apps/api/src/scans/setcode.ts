@@ -119,6 +119,8 @@ export async function identifyBySetCode(
   return {
     cardId: card.id,
     name,
+    // keep the catalog's own-language name; the interface shows both
+    nameLocal: card.name && card.name !== name ? card.name : null,
     setId: String(set.id),
     setName: String(set.name ?? read.code),
     // the printed form ("240/193") is what sellers search on; keep it whole

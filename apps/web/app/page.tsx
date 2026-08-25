@@ -55,6 +55,9 @@ type Scan = {
   identification?: {
     cardId: string;
     name: string;
+    /** the catalog's own-language name, when it differs from the display one */
+    nameLocal?: string | null;
+    setId?: string | null;
     setName: string;
     localId: string;
     rarity?: string | null;
@@ -863,12 +866,19 @@ function IdentityPanel({ scan }: { scan: Scan }) {
       {idn.imageUrl && <img src={idn.imageUrl} alt={idn.name} />}
       <div>
         <h2>{idn.name}</h2>
+        {idn.nameLocal && idn.nameLocal !== idn.name && (
+          <div className="identity-local" lang="ja">
+            {idn.nameLocal}
+            <span className="muted small"> · as printed on the card</span>
+          </div>
+        )}
         <div className="muted">
           {idn.game && (
             <span className="badge info" style={{ marginRight: 6 }}>
               {GAME_LABELS[idn.game] ?? idn.game}
             </span>
           )}
+          {idn.setId && idn.setId !== idn.setName ? `${idn.setId} · ` : ""}
           {idn.setName} · #{idn.localId}
           {idn.rarity ? ` · ${idn.rarity}` : ""}
         </div>
@@ -1699,8 +1709,17 @@ function PriceHero({ scan }: { scan: Scan }) {
           {id?.imageUrl && <img className="ph-thumb" src={id.imageUrl} alt="" loading="lazy" />}
           <div className="ph-id-text">
             <div className="ph-name">{id?.name ?? "Unidentified card"}</div>
+            {id?.nameLocal && id.nameLocal !== id.name && (
+              <div className="ph-name-local" lang="ja">{id.nameLocal}</div>
+            )}
             <div className="muted small">
-              {[id?.setName, id?.localId ? `#${id.localId}` : null, id?.rarity]
+              {[
+                // the set code identifies the set in any language; the local
+                // name alone tells an English reader nothing
+                id?.setId && id.setId !== id.setName ? `${id.setId} · ${id.setName}` : id?.setName,
+                id?.localId ? `#${id.localId}` : null,
+                id?.rarity,
+              ]
                 .filter(Boolean)
                 .join(" · ") || "no catalog match"}
             </div>

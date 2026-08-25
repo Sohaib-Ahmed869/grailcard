@@ -109,6 +109,10 @@ export const Identification = z.object({
   imageUrl: z.string().nullish(), // official card render
   matchScore: z.number(), // 0..1 name-similarity of the accepted match
   ocrName: z.string(), // what we actually read, shown for honesty
+  /** the catalog's own-language name, where it differs from the display
+   *  name. A Japanese card is メガゲンガーex on the card and "Mega Gengar ex"
+   *  everywhere it is bought and sold; a collector wants to see both. */
+  nameLocal: z.string().nullish(),
   game: z.string().default("pokemon"), // pokemon | mtg | yugioh
 });
 export type Identification = z.infer<typeof Identification>;

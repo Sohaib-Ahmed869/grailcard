@@ -1901,3 +1901,12 @@ button.primary:disabled {
    proof, and that is worth seeing next to the price. */
 .listing-age { font-size: 10.5px; color: var(--muted); }
 .listing-age.stale { color: var(--warn, #b4762a); }
+
+/* A Japanese card has two names: the one printed on it and the one it is
+   bought and sold under. Both belong on screen — the English name leads
+   because it is what the market uses, the printed name sits under it. */
+.ph-name-local, .identity-local {
+  font-size: 13px; color: var(--muted); margin-top: 1px;
+  font-feature-settings: "palt" 1;
+}
+.identity-local { margin-bottom: 4px; }

@@ -76,3 +76,38 @@ test("a sealed pack is recognised through OCR's missing spaces", () => {
   assert.equal(isSealedProduct(["2025 ONE PIECE", "PORTGAS.D.ACE", "MANGA ART SEC"]), false);
   assert.equal(isSealedProduct([]), false);
 });
+
+import { labelDisplayName } from "../src/scans/scans.service.js";
+
+test("the English name is recovered from whichever label line carries it", () => {
+  // the slab reader had guessed "SPECIALARTRARE" was the name, so the English
+  // name was lost and the card displayed as メガゲンガーex
+  assert.equal(
+    labelDisplayName({
+      name: "SPECIALARTRARE",
+      setCandidates: ["POKEMONM aJP", "SPECIALARTRARE", "MEGAGENGAReX", "GEMMT", "I B OI"],
+    }),
+    "Mega Gengar ex",
+  );
+  assert.equal(
+    labelDisplayName({
+      name: "MEGACHARIZARDXeX",
+      setCandidates: ["POKEMONM JP", "MEGACHARIZARDXeX", "GEMMT", "SPECIALARTRARE"],
+    }),
+    // the form letter is its own word: "Charizardx" is not a card
+    "Mega Charizard X ex",
+  );
+});
+
+test("a name already correctly cased is left alone", () => {
+  assert.equal(labelDisplayName({ name: "PORTGAS.D.ACE", setCandidates: [] }), "Portgas.D.Ace");
+  assert.equal(labelDisplayName({ name: "Stussy", setCandidates: [] }), "Stussy");
+});
+
+test("grading furniture is never mistaken for a card name", () => {
+  assert.equal(
+    labelDisplayName({ name: "GEMMT", setCandidates: ["GEM MT", "PSA", "2025", "144830132"] }),
+    null,
+  );
+  assert.equal(labelDisplayName(null), null);
+});

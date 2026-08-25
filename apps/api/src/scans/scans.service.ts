@@ -924,18 +924,49 @@ export class ScansService {
   }
 }
 
-/** The card name a grading label prints, de-compounded for display.
- *  OCR returns the label's condensed font glued together — "MEGACHARIZARDXeX"
- *  — so the words are split back apart on the case boundaries. The label's
- *  English name is preferred over a Japanese catalog name because it is what
- *  the owner sees through the case, and what eBay sellers write in titles. */
-export function labelDisplayName(slab: { name?: string | null } | null | undefined): string | null {
-  const raw = slab?.name?.trim();
-  if (!raw || raw.length < 3) return null;
-  // a line that is just the rarity or the grade is not a name
-  if (/^(SPECIAL\s*ART\s*RARE|GEM\s*MT|GEMMT|MINT|[A-Z]{2,4}\s*\d)$/i.test(raw.replace(/\s+/g, " "))) {
-    return null;
-  }
+/** The English card name a grading label prints.
+ *
+ *  The label carries it in English even for a Japanese card — "MEGA GENGAR ex"
+ *  over メガゲンガーex — which is what the owner sees through the case and what
+ *  every seller writes. Reading it was previously limited to whichever single
+ *  line the slab reader had guessed was the name, and on this card it guessed
+ *  "SPECIALARTRARE", so the English name was lost and the display fell back to
+ *  Japanese. Every label line is considered now, and the ones that are plainly
+ *  not names are ruled out instead.
+ */
+const NOT_A_NAME = [
+  /^(SPECIAL|ILLUSTRATION|SPECIALART|ART)?\s*(ART)?\s*RARE$/i,   // rarity lines
+  /^(GEM\s*MT|GEMMT|MINT|NM\s*MT|PRISTINE|BLACK\s*LABEL)/i,      // grade wording
+  /^(PSA|BGS|BECKETT|CGC|SGC|TAG|ACE|WOTC)\b/i,                  // grader furniture
+  /^\d{4}\b/,                                                    // the year line
+  /^\d+$/,                                                        // cert or number
+  /\bJP\b|\bJAPANESE\b|\bENGLISH\b/i,                          // the set/language line
+  /^(CENTERING|CORNERS|EDGES|SURFACE)/i,                          // Beckett subgrades
+];
+
+export function labelDisplayName(
+  slab:
+    | { name?: string | null; setCandidates?: string[] | null; setLine?: string | null }
+    | null
+    | undefined,
+): string | null {
+  const lines = [slab?.name, ...(slab?.setCandidates ?? [])]
+    .filter((l): l is string => Boolean(l && l.trim().length >= 3))
+    .map((l) => l.trim());
+
+  const candidates = lines.filter((l) => {
+    const flat = l.replace(/\s+/g, " ");
+    if (NOT_A_NAME.some((re) => re.test(flat))) return false;
+    // needs enough letters to be a name at all
+    return [...flat].filter((c) => /[A-Za-z]/.test(c)).length >= 4;
+  });
+  if (candidates.length === 0) return null;
+
+  // A card name carries the game's own suffixes; when one line does and the
+  // others do not, that line is the name.
+  const suffixed = candidates.find((c) => /(ex|gx|vmax|vstar|v)$/i.test(c.replace(/\s+/g, "")));
+  const raw = suffixed ?? candidates[0];
+
   // Not a general de-compounder: splitting on case boundaries turns
   // "MEGACHARIZARDXeX" into "MEGACHARIZARD Xe X", which reads as a name, passes
   // the usability check, and finds nothing. Only the two boundaries Pokemon
@@ -944,10 +975,31 @@ export function labelDisplayName(slab: { name?: string | null } | null | undefin
   // where any other word begins.
   const split = raw
     .replace(/^(MEGA|DARK|SHINING|RADIANT|ORIGIN|PRIMAL)(?=[A-Z])/i, "$1 ")
+    // the game's suffix comes off before the form letter, or "CHARIZARDXeX"
+    // still ends in a letter and the form letter has nothing to detach from
     .replace(/(?<=[A-Za-z]{3})(vmax|vstar|ex|gx|v)$/i, " $1")
+    // Mega Charizard X / Mega Mewtwo Y: the form letter is its own word, and
+    // glued on it leaves "Charizardx", which is not a card
+    .replace(/([A-Z]{5,})([XY])(?=\s|$)/, "$1 $2")
     .replace(/\s{2,}/g, " ")
     .trim();
-  return split || null;
+  if (!split) return null;
+
+  // Labels are set in all caps. Displayed as-is that shouts, and it also hides
+  // the convention that carries meaning: "ex" is lowercase on the card, "GX"
+  // and "VMAX" are not. Judged on the ORIGINAL line — by this point the split
+  // has already introduced lowercase of its own.
+  // ...and ignoring the suffix when judging it, since "MEGAGENGAReX" carries a
+  // lowercase e that has nothing to do with how the rest is set
+  const stem = raw.replace(/(vmax|vstar|ex|gx|v)$/i, "");
+  const shouted = stem === stem.toUpperCase();
+  const cased = shouted
+    ? split.replace(/[^\s.'-]+/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    : split;
+  return cased
+    .replace(/\b(ex)\b/gi, "ex")
+    .replace(/\b(gx|vmax|vstar|sar|sr|ar|ur)\b/gi, (m) => m.toUpperCase())
+    .trim();
 }
 
 /** Is this name unusable as a search term?
