@@ -37,6 +37,8 @@ export type ListingResult = {
   filteredToGrade: boolean;
   /** listings that survived every filter, of which `listings` shows the first few */
   matched: number;
+  /** how many extreme listings were trimmed before taking the median */
+  trimmed: number;
   /** median asking price of what survived filtering — a figure, not just a list.
    *  Median rather than mean: one aspirational listing should not move it. */
   medianAsk: number | null;
@@ -51,6 +53,13 @@ export type ListingResult = {
    *  and the interface should be able to say so */
   otherPrintings: { name: string; count: number; low: number; high: number }[];
 };
+
+/** Titles that are not a single copy of the card being priced. A bundle, a
+ *  break slot, or a damaged slab all trade at prices that say nothing about
+ *  what this card is worth, and they sit at both ends of the range where they
+ *  do the most damage to a median. */
+const NOT_ONE_CARD =
+  /\b(lot|lots|bundle|bulk|collection|joblot|job lot|break|breaks|random|mystery|repack|custom|proxy|proxies|reprint|orica|digital|read desc|damaged|cracked|scratched|reholder|empty|case only|sleeve|toploader|binder|playset|\d{2,}\s*cards?)\b|\b(art|complete|full|master|sequential)\s+set\b|\bsequential\b/i;
 
 const cache = new Map<string, { at: number; v: ListingResult }>();
 let token: { value: string; expires: number } | null = null;
@@ -107,6 +116,10 @@ export async function fetchListings(opts: {
   printingHint?: string | null;
   /** true when the card carries Japanese text */
   japanese?: boolean;
+  /** printed identifiers that narrow the search harder than a name does: a set
+   *  code ("M2"), a rarity suffix ("SAR"), a treatment ("SP"), a sealed pack's
+   *  artwork ("Scyther"). These are what sellers type into their titles. */
+  extraTokens?: (string | null | undefined)[];
 }): Promise<ListingResult | null> {
   const show = Math.min(opts.limit ?? 12, 24);
   // Fetch wide, show narrow. Printing and grade filtering discard most of what
@@ -120,11 +133,31 @@ export async function fetchListings(opts: {
   // from the same set; with "OP13-119" the same search returns the actual card
   // at $900-$1,700, which is where its market really is.
   const number = opts.number ? clean(opts.number) : null;
-  const parts = [clean(opts.name)];
+  // A name is one signal among several and not always the best one. On a
+  // Japanese card the catalog name is Japanese and the label name comes back
+  // from OCR with the spaces gone, while "M2 110/080 SAR" identifies the card
+  // exactly and is what every seller writes.
+  // A name still carrying an OCR run-on ("MEGA CHARIZARDX eX") searches for a
+  // string no seller has ever typed and quietly narrows the pool to the wrong
+  // listings. With two or more printed identifiers in hand we are better off
+  // without it: "M2 110/080 SAR PSA 10" finds the card exactly.
+  const identifiers = (opts.extraTokens ?? []).filter(Boolean).length;
+  const gluedRun = /[A-Z]{9,}/.test(opts.name);
+  const usableName =
+    /[^\u0000-\u007F]/.test(opts.name) || (gluedRun && identifiers >= 2)
+      ? ""
+      : clean(opts.name);
+  const parts = [usableName];
   if (number) parts.push(number);
-  else if (opts.setName) parts.push(clean(opts.setName));
+  else if (opts.setName && !/[^\u0000-\u007F]/.test(opts.setName)) parts.push(clean(opts.setName));
+  for (const t of opts.extraTokens ?? []) {
+    const c = t ? clean(String(t)) : "";
+    // keep the query tight: skip anything already present
+    if (c && !parts.some((p) => p.toLowerCase().includes(c.toLowerCase()))) parts.push(c);
+  }
   if (opts.grader && opts.grade != null) parts.push(`${opts.grader} ${opts.grade}`);
-  const query = parts.filter(Boolean).join(" ");
+  const query = parts.filter(Boolean).join(" ").trim();
+  if (!query) return null;
 
   const cardPrinting: Printing = readPrinting(opts.printingHint);
   if (opts.japanese && !cardPrinting.language) cardPrinting.language = "ja";
@@ -170,7 +203,11 @@ export async function fetchListings(opts: {
       };
     });
 
-    let filtered = listings;
+    // Drop what is not a single copy of this card before anything else. On the
+    // Charizard these were a $165 "read description" listing and an $11,250
+    // bundle, sitting at opposite ends and both pulling the middle.
+    let filtered = listings.filter((l) => !NOT_ONE_CARD.test(l.title));
+    if (filtered.length < 3) filtered = listings;
 
     // Drop listings whose title carries a DIFFERENT card number. Sellers put the
     // number in the title, so this is a cheap and reliable way to reject the
@@ -229,8 +266,27 @@ export async function fetchListings(opts: {
 
     filtered.sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
 
-    const priced = filtered.filter((l) => l.price != null && l.url);
-    const values = priced.map((l) => l.price as number).sort((a, b) => a - b);
+    // One listing relisted three times is one data point, not three. The 1999
+    // Jungle pack search returned the same $4,750 multi-pack set three times
+    // over, which on six results moved the median from $1,400 to $3,125.
+    const seenListing = new Set<string>();
+    const deduped = filtered.filter((l) => {
+      const k = `${l.title.toLowerCase().replace(/\s+/g, " ").trim()}|${l.price ?? ""}`;
+      if (seenListing.has(k)) return false;
+      seenListing.add(k);
+      return true;
+    });
+
+    const priced = deduped.filter((l) => l.price != null && l.url);
+    const all = priced.map((l) => l.price as number).sort((a, b) => a - b);
+
+    // Trim the extremes before taking the middle. Marketplace asks have a long
+    // right tail — a seller who lists at ten times market loses nothing by
+    // leaving it up — and a thin left tail of bait and misdescribed listings.
+    // Neither end carries information about what the card trades at, so with
+    // enough samples to afford it we cut a tenth off each end first.
+    const cut = all.length >= 8 ? Math.floor(all.length * 0.1) : 0;
+    const values = cut > 0 ? all.slice(cut, all.length - cut) : all;
     const median =
       values.length === 0
         ? null
@@ -247,6 +303,7 @@ export async function fetchListings(opts: {
       medianAsk: median,
       askLow: values[0] ?? null,
       askHigh: values[values.length - 1] ?? null,
+      trimmed: cut > 0 ? cut * 2 : 0,
       printing: describePrinting(cardPrinting),
       filteredToPrinting,
       otherPrintings,

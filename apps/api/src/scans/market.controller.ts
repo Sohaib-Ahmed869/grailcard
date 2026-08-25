@@ -38,7 +38,7 @@ export class MarketController {
     @Query("ja") ja?: string,
   ) {
     const empty = {
-      listings: [], total: 0, matched: 0, query: name ?? "", filteredToGrade: false,
+      listings: [], total: 0, matched: 0, trimmed: 0, query: name ?? "", filteredToGrade: false,
       medianAsk: null, askLow: null, askHigh: null,
       printing: null, filteredToPrinting: false, otherPrintings: [],
     };

@@ -71,3 +71,39 @@ test("describePrinting names it for a reader", () => {
   );
   assert.equal(describePrinting(readPrinting("just a card")), null);
 });
+
+test("Chinese printings are their own market", () => {
+  // the same Stussy SP: $51-68 Chinese, $100-124 Japanese, $130-138 English
+  const en = readPrinting("Stussy (SP) OP07-085 A Fist of Divine Speed Foil English");
+  const zh = readPrinting("Stussy (SP Alt Art) OP07-085 SR A Fist of Divine Speed - Chinese");
+  const ja = readPrinting("Stussy OP07-085 SP SR Parallel A Fist of Divine Speed Japanese");
+  assert.equal(en.language, "en");
+  assert.equal(zh.language, "zh");
+  assert.equal(comparePrinting(en, zh), "conflict");
+  assert.equal(comparePrinting(en, ja), "conflict");
+});
+
+test("SP is a treatment, and does not steal the wanted-poster line", () => {
+  assert.equal(readPrinting("Stussy (SP Alt Art) OP07-085 SR").family, "sp");
+  // "Wanted SP" is the wanted-poster printing, listed before SP for this reason
+  assert.equal(readPrinting("Carrying on His Will Wanted SP OP13-119 BGS 9.5").family, "wanted");
+  // a plain SR is NOT the SP treatment - $2 vs $130
+  assert.equal(readPrinting("Stussy OP07-085 SR 500 Years in the Future English").family, null);
+});
+
+test("a booster box is not a booster pack", () => {
+  // both are "1999 Jungle 1st Edition"; the boxes ask $4,750 and the packs $1,400
+  const pack = readPrinting("1999 Pokemon Jungle Foil Pack 1st Edition Scyther PSA 10");
+  const box  = readPrinting("1999 Pokemon Jungle 1st Edition Booster Box Sealed WOTC");
+  assert.equal(pack.form, "pack");
+  assert.equal(box.form, "box");
+  assert.equal(comparePrinting(pack, box), "conflict");
+  assert.equal(
+    comparePrinting(pack, readPrinting("1999 Jungle 1st Edition Booster Pack Wigglytuff PSA 10")),
+    "match",
+  );
+  // an ETB is a box, not a pack
+  assert.equal(readPrinting("Pokemon Elite Trainer Box sealed").form, "box");
+  // a single card names no form at all
+  assert.equal(readPrinting("Charizard Base Set 4/102 PSA 9").form, null);
+});

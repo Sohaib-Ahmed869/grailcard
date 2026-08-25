@@ -21,7 +21,14 @@ _ENGINE = None
 
 COLLECTOR_RE = re.compile(r"\b(\d{1,3})\s*/\s*(\d{1,3})\b")
 # game-specific set codes printed in Latin script even on Japanese cards
-SET_CODE_RE = re.compile(r"\b((?:OP|ST|EB|PRB)\d{2})\s*[-–]\s*(\d{3})\b", re.IGNORECASE)
+# The \b anchors used to sit on both ends, which meant the code had to stand
+# alone in its token. One Piece prints the treatment markers flush against it —
+# "SP OP07-085 SR" comes back from OCR as "SPOP07-085SR" — so a raw card whose
+# number was plainly legible read as having no number at all, and got no price.
+SET_CODE_RE = re.compile(
+    r"(?<![A-Z0-9])(?:SP)?((?:OP|ST|EB|PRB)\d{2})\s*[-–]\s*(\d{3})(?!\d)",
+    re.IGNORECASE,
+)
 
 _SLAB_COMPANIES = re.compile(r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS)\b", re.IGNORECASE)
 _COMPANY_ALIAS = {"BECKETT": "BGS"}
@@ -43,7 +50,11 @@ _CERT_RE = re.compile(r"\b(\d{7,10})\b")  # PSA 8-9 digits, BGS up to 10
 _YEAR_RE = re.compile(r"(?<!\d)(19[6-9]\d|20[0-4]\d)(?!\d)")
 _LABEL_NUM_RE = re.compile(r"#\s*([A-Z]{0,3}\d{1,3})(?!\d)")  # \b fails on "#100CHARIZARD"
 # same OCR space-loss, on the number line: "#100 CHARIZARD" -> "100CHARIZARD"
+# A leading number glued to a word is usually the card number ("100CHARIZARD"),
+# but not when the word makes it an ordinal or a count: "1ST EDITION" and
+# "11 ADDITIONAL GAME CARDS" are not card #1 and card #11.
 _LEADING_NUM_RE = re.compile(r"^(\d{1,3})(?=[A-Za-z])")
+_ORDINAL_RE = re.compile(r"^\d{1,3}(ST|ND|RD|TH)\b", re.IGNORECASE)
 # grading-company furniture that is never part of the card or set name
 _LABEL_NOISE = re.compile(
     r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|AGS|GEM|MINT|MT|NM|EX[-\s]?MT|PRISTINE|"
@@ -180,7 +191,9 @@ def parse_slab(texts: list) -> dict | None:
                     if len(cand) >= 4 and sum(ch.isalpha() for ch in cand) >= 4:
                         set_line = cand
                         break
-        n = _LABEL_NUM_RE.search(raw) or _LEADING_NUM_RE.search(raw)
+        n = _LABEL_NUM_RE.search(raw) or (
+            None if _ORDINAL_RE.match(raw.strip()) else _LEADING_NUM_RE.search(raw)
+        )
         if n and label_number is None:
             label_number = n.group(1).lstrip("#").strip()
 
@@ -262,6 +275,17 @@ def parse_slab(texts: list) -> dict | None:
             # supplies it, so print it — a display string with no number leaves
             # every downstream reader parsing for one that is not there.
             grade_text = f"{grade_text} {tup.grade:g}".strip()
+        else:
+            # The display string picked up a number, but the cascade is the
+            # authority on what the grade IS. Where they disagree the string is
+            # wrong: on a "1999 JUNGLE FOIL PACK / 1ST EDITION" label the
+            # standalone-number search found the 1 of "1ST" and printed a PSA 10
+            # as "GEM MT 1". One label, two different grades on screen.
+            shown = re.search(r"\d+(?:\.\d)?", grade_text)
+            if shown and abs(float(shown.group(0)) - tup.grade) > 1e-9:
+                grade_text = (
+                    grade_text[: shown.start()] + f"{tup.grade:g}" + grade_text[shown.end():]
+                ).strip()
     if tup.qualifier and tup.qualifier not in grade_text:
         grade_text = f"{grade_text} ({tup.qualifier})".strip()
 
@@ -433,7 +457,18 @@ def read_card_text(warped: np.ndarray) -> dict:
     all_text = " ".join(t["text"] for t in texts)
     # kana is unambiguous Japanese; CJK ideographs also appear when the OCR
     # model reads kana/kanji as Chinese glyphs, so both count as evidence
-    japanese = bool(re.search(r"[぀-ヿ一-鿿]", all_text))
+    # A single CJK glyph does not make a Japanese printing. One Piece prints
+    # 特 ("SPECIAL") and 商 on ENGLISH cards, and matching any CJK character at
+    # all declared an English Stussy to be Japanese — which then priced it
+    # against the Japanese printing, a different card at a different price.
+    #
+    # Kana is the reliable signal: it appears in Japanese rules text and
+    # essentially never as decoration. Kanji has to clear a real count, because
+    # a Japanese card's rules text carries dozens and a decorated English card
+    # carries one or two.
+    kana = len(re.findall(r"[぀-ヿ]", all_text))
+    kanji = len(re.findall(r"[一-鿿]", all_text))
+    japanese = kana >= 2 or kanji >= 6
     latin = len(re.findall(r"[A-Za-z]", all_text))
     cjk = len(re.findall(r"[぀-ヿ一-鿿]", all_text))
     language = "ja" if cjk > latin * 0.5 else ("en" if latin > 0 else "unknown")

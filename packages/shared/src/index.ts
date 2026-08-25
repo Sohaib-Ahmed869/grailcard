@@ -189,8 +189,12 @@ export const Valuation = z.object({
       /** listings behind the median, and how many matched the search overall */
       count: z.number(),
       total: z.number(),
-      grader: z.string(),
-      grade: z.number(),
+      /** null on a raw card priced from listings because its printing is not
+       *  what the catalog quotes — an SP treatment, a manga art, a parallel */
+      grader: z.string().nullish(),
+      grade: z.number().nullish(),
+      /** true when these asks are for an UNGRADED copy */
+      raw: z.boolean().default(false),
       /** the printing these figures are for — a card number is not a product */
       printing: z.string().nullish(),
       /** printings of the same number we excluded, with their asking ranges */

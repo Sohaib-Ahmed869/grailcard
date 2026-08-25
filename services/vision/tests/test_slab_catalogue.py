@@ -165,3 +165,72 @@ def test_catalogue(case_id, lines, grader, grade, qualifier, label, is_slab):
         assert got.get("label") == label, (
             f"{case_id}: label {got.get('label')!r} != {label!r}"
         )
+
+
+# ── the sealed-pack label that printed a PSA 10 as "GEM MT 1" ────────────────
+# "1ST EDITION" put a 1 in the token stream, and the display string took it.
+# The cascade always had the grade right; only the string people read was wrong.
+
+def test_first_edition_does_not_become_the_grade():
+    from app.pipeline.identify import parse_slab
+
+    def t(text, top):
+        return {"text": text, "top": top}
+
+    texts = [
+        t("1999 WOTC-POKEMON", 0.05),
+        t("JUNGLE FOIL PACK", 0.08),
+        t("1ST EDITION-SCYTHER", 0.11),
+        t("GEM MT", 0.08),
+        t("10", 0.08),
+        t("26869245", 0.11),
+    ]
+    slab = parse_slab(texts)
+    assert slab is not None
+    assert slab["grade"] == 10.0
+    # the string a person reads must carry the same number as the tuple
+    assert "10" in slab["gradeText"], slab["gradeText"]
+    assert not slab["gradeText"].rstrip().endswith(" 1"), slab["gradeText"]
+    # "1ST" is an ordinal, not card #1 - a sealed pack has no card number
+    assert slab["cardNumber"] != "1", slab["cardNumber"]
+
+
+# ── One Piece prints treatment markers flush against the card number ─────────
+# "SP OP07-085 SR" is one token to OCR. With \b anchors on both ends the code
+# had to stand alone, so a raw card with a perfectly legible number read as
+# having none, matched nothing, and was priced at nothing.
+
+def test_one_piece_code_survives_its_treatment_markers():
+    from app.pipeline.identify import SET_CODE_RE
+
+    def code(t):
+        m = SET_CODE_RE.search(t)
+        return f"{m.group(1).upper()}-{m.group(2)}" if m else None
+
+    assert code("SPOP07-085SR") == "OP07-085"     # exactly what OCR returned
+    assert code("SP OP07-085 SR") == "OP07-085"
+    assert code("OP13-119") == "OP13-119"
+    assert code("ST01-001") == "ST01-001"
+    assert code("EB01-012") == "EB01-012"
+    # still anchored enough not to invent codes out of longer runs
+    assert code("TOP07-0855") is None
+
+
+# ── a decorative glyph is not a Japanese printing ───────────────────────────
+# One Piece prints 特 ("SPECIAL") on ENGLISH cards. Treating any CJK character
+# as proof of a Japanese printing priced an English Stussy SP against the
+# Japanese one - $130 versus $100, a different card in a different market.
+
+def test_single_glyph_is_not_a_japanese_printing():
+    import re
+
+    def is_japanese(text):
+        kana = len(re.findall(r"[぀-ヿ]", text))
+        kanji = len(re.findall(r"[一-鿿]", text))
+        return kana >= 2 or kanji >= 6
+
+    # the English Stussy, exactly as OCR returned it
+    assert not is_japanese("9000 特 OnPlay Youmaytrash1ofyourCharacters 商 CHARACTE Stussy CPO SPOP07-085SR")
+    # the Japanese Ace, likewise
+    assert is_japanese("ポートガス・D・エース 白ひげ海賊団 自分のライフが3枚以下の場合")
+    assert not is_japanese("Charizard Base Set 4/102 PSA 9")

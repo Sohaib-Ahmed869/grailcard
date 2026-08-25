@@ -2,7 +2,7 @@ import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Scan, VisionAnalyzeResponse } from "@grailcard/shared";
+import type { Identification, Scan, VisionAnalyzeResponse } from "@grailcard/shared";
 import { db } from "../db.js";
 import { identifyApiTcg } from "./apitcg.js";
 import { fetchWebPrices } from "./geminiprice.js";
@@ -13,6 +13,7 @@ import { fetchJustTcgPrice } from "./justtcg.js";
 import { fetchGradedPrices, type GradePoint } from "./gradedprices.js";
 import { fetchListings } from "./ebaylistings.js";
 import { readPrinting } from "./printing.js";
+import { readSetCode, identifyBySetCode, isSealedProduct } from "./setcode.js";
 import { writeGradePrices } from "../cards.store.js";
 
 // Mirrors TIERS in services/vision/app/pipeline/slab.py. Never price across
@@ -69,6 +70,14 @@ export class ScansService {
     const createdAt = new Date().toISOString();
     // free text gathered along the way that might name this copy's printing
     const printingHints: string[] = [];
+    // printed identity read off the label and the card face, needed again at
+    // pricing time to build a search that does not depend on a clean name
+    let codeRead: ReturnType<typeof readSetCode> = null;
+    let slabLines: (string | null | undefined)[] = [];
+    let sealed = false;
+    /** "SP" where One Piece printed its Special treatment flush against the
+     *  card number. The plain SR of OP07-085 asks $2; the SP asks $130. */
+    let treatment: string | null = null;
     const dir = join(STORAGE_ROOT, id);
     mkdirSync(dir, { recursive: true });
 
@@ -189,6 +198,12 @@ export class ScansService {
       // has to come from somewhere else: the slab label (Beckett prints the
       // variant), the card's own text, and the vision model's read of the art.
       printingHints.push(...(frontRes.ocr.texts ?? []).map(String));
+      if (/(?:^|[^A-Z])SP\s*(?:OP|ST|EB|PRB)\d{2}/i.test((frontRes.ocr.texts ?? []).join(" "))) {
+        treatment = "SP";
+        // stated as its own token so the printing matcher can see it: glued to
+        // the number as "SPOP07-085SR" there is no word boundary to match on
+        printingHints.push("SP");
+      }
       if (frontRes.ocr.slab) {
         const L = frontRes.ocr.slab as Record<string, any>;
         printingHints.push(
@@ -209,9 +224,76 @@ export class ScansService {
           `[slab-label] ${L.company} ${L.gradeText} | year=${L.year ?? "-"} | set=${L.setLine ?? "-"} | num=${L.cardNumber ?? "-"} | name=${L.name ?? "-"}`,
         );
       }
-      const labelMatch = frontRes.ocr.slab
-        ? await identifyFromSlabLabel(frontRes.ocr.slab)
+      // A printed SET CODE outranks everything below it. "M2a", "SV8a" and the
+      // "110/080 SAR" on the card face are exact identifiers, not names to be
+      // scored: the set either exists at that id or it does not. Matching names
+      // instead is what put a Japanese Mega Charizard X ex SAR — M2 #110, about
+      // A$1,500 — into the English set Phantasmal Flames as #013 Double Rare,
+      // a $5 card, and then priced it there with a straight face.
+      codeRead = readSetCode([
+        ...(frontRes.ocr.texts ?? []).map(String),
+        ...(frontRes.ocr.slab
+          ? [
+              (frontRes.ocr.slab as any).setLine,
+              (frontRes.ocr.slab as any).name,
+              ...((frontRes.ocr.slab as any).setCandidates ?? []),
+            ].filter(Boolean).map(String)
+          : []),
+      ]);
+      let codeMatch = codeRead
+        ? await identifyBySetCode(
+            codeRead,
+            (frontRes.ocr.slab as any)?.cardNumber ?? null,
+            labelDisplayName(frontRes.ocr.slab as any),
+          )
         : null;
+      // The catalog names Japanese cards in Japanese ("メガゲンガーex") and the
+      // label prints them in a condensed font OCR returns glued together
+      // ("MEGAGENGAReX"). Neither is searchable: every sold comp and every
+      // listing for this card is written in English, so a Japanese or
+      // run-together name finds nothing and the card ends up with no price at
+      // all despite being identified exactly right.
+      if (codeMatch && needsEnglishName(codeMatch.name)) {
+        const en = await identifyWithGemini(
+          front.buffer.toString("base64"),
+          front.mimetype,
+        );
+        if (en?.printing) printingHints.push(en.printing);
+        if (en?.name && !needsEnglishName(en.name)) {
+          codeMatch = { ...codeMatch, name: en.name, ocrName: codeMatch.ocrName };
+        }
+      }
+      if (codeRead) {
+        console.log(
+          `[set-code] ${codeRead.code} ${codeRead.printedNumber ?? codeRead.number ?? "?"} ` +
+            `${codeRead.rarity ?? ""} -> ${codeMatch?.cardId ?? "unresolved"}`,
+        );
+      }
+
+      // A sealed pack is a product, not a card. Nothing below this point can
+      // identify one — there is no collector number and no catalog entry — and
+      // trying produced card #1 of Jungle from the "1ST" in "1ST EDITION".
+      slabLines = frontRes.ocr.slab
+        ? [
+            (frontRes.ocr.slab as any).setLine,
+            (frontRes.ocr.slab as any).name,
+            ...((frontRes.ocr.slab as any).setCandidates ?? []),
+          ]
+        : [];
+      sealed = isSealedProduct(slabLines);
+      const sealedMatch =
+        sealed && frontRes.ocr.slab
+          ? { identification: sealedIdentification(frontRes.ocr.slab as any), valuation: null }
+          : null;
+      if (sealed) console.log(`[sealed] ${slabLines.filter(Boolean).join(" | ")}`);
+
+      const labelMatch = sealedMatch
+        ? sealedMatch
+        : codeMatch
+          ? { identification: codeMatch, valuation: null }
+          : frontRes.ocr.slab
+            ? await identifyFromSlabLabel(frontRes.ocr.slab)
+            : null;
 
       const matches = labelMatch
         ? [labelMatch]
@@ -564,6 +646,15 @@ export class ScansService {
     const labelSlab = frontRes.ocr?.slab as
       | { grader?: string | null; grade?: number | null }
       | undefined;
+    // A card can be identified exactly and still have no price source: Japanese
+    // Pokemon sets carry no TCGplayer or Cardmarket feed, and our graded-sales
+    // provider is English-only. Everything downstream — the grader, the grade,
+    // the asking-price fallback — hung off `valuation` being non-null, so those
+    // cards silently skipped the entire pricing stage and showed nothing at all
+    // despite us knowing precisely what they were.
+    if (!scan.valuation && labelSlab?.grader) {
+      scan.valuation = { source: "label", updatedAt: null };
+    }
     if (scan.valuation && labelSlab?.grader) {
       scan.valuation.slabGrader = labelSlab.grader;
       scan.valuation.slabGrade = labelSlab.grade ?? null;
@@ -581,9 +672,51 @@ export class ScansService {
     // a number drawn from a different market entirely.
     const askGrader = scan.valuation?.slabGrader ?? null;
     const askGrade = scan.valuation?.slabGrade ?? null;
-    if (scan.valuation && askGrader && askGrader !== "UNKNOWN" && askGrade != null) {
-      const sold = scan.valuation.pricesByGrader?.[askGrader]?.[String(askGrade)]?.price;
-      if (sold == null && scan.identification) {
+    // A RAW card needs this too when it carries a special printing. TCGplayer
+    // quotes the base print: the plain SR of OP07-085 is $1.90, and the SP
+    // treatment of the identical card number is about $130. Quoting $1.90 for
+    // the SP is the same error as quoting a raw price for a slab.
+    const rawSpecialPrinting =
+      !askGrader && Boolean(readPrinting(printingHints.join(" ")).family);
+    if (
+      scan.valuation &&
+      ((askGrader && askGrader !== "UNKNOWN" && askGrade != null) || rawSpecialPrinting)
+    ) {
+      const sold =
+        askGrader && askGrade != null
+          ? scan.valuation.pricesByGrader?.[askGrader]?.[String(askGrade)]?.price
+          : null;
+      // What the label and the card print, over and above the name.
+      const askTokens = [
+        codeRead?.code,
+        codeRead?.rarity ?? rarityToken(scan.identification?.rarity),
+        // a One Piece treatment marker printed flush against the number
+        treatment,
+        // for a sealed pack the artwork IS the product: a Scyther Jungle pack
+        // and a Wigglytuff Jungle pack are different things at different prices
+        sealed ? sealedArtwork(slabLines) : null,
+      ];
+
+      // A name we cannot search with produces a search for something else. On a
+      // Japanese Gengar the catalog name "メガゲンガーex" returned a $272 median
+      // across $60-$1,390 of unrelated cards. Better to show no figure than a
+      // confident one drawn from the wrong listings.
+      // An unusable name is only fatal when nothing else identifies the card.
+      // "240 M2a SAR PSA 10" finds the Gengar exactly without naming it, and
+      // those tokens are what sellers put in their titles anyway.
+      const hasPrintedId = Boolean(
+        codeRead?.code || scan.identification?.localId || askTokens.filter(Boolean).length >= 2,
+      );
+      if (
+        sold == null &&
+        scan.identification &&
+        needsEnglishName(scan.identification.name) &&
+        !hasPrintedId
+      ) {
+        console.warn(
+          `[ask] no searchable name and no printed identifier for "${scan.identification.name}"`,
+        );
+      } else if (sold == null && scan.identification) {
         try {
           // Which PRINTING is this copy? Nothing so far had to answer that:
           // the catalog match resolves a card NUMBER, and a number is not a
@@ -612,11 +745,16 @@ export class ScansService {
             limit: 24,
             printingHint: [...printingHints, scan.identification.rarity ?? ""].join(" "),
             japanese: scan.origin?.japaneseTextDetected ?? false,
+            extraTokens: askTokens,
           });
           // filteredToGrade is the condition, not a nicety: an unfiltered median
           // mixes a PSA 10 ask into a BGS 8 valuation, which is the cross-grader
           // error this whole redesign exists to stop.
-          if (live?.medianAsk != null && live.filteredToGrade) {
+          // Grade filtering is required only when there IS a grade to filter
+          // to. A raw card has none, and demanding it here meant the raw path
+          // fetched its listings and then threw them away.
+          const gradeOk = askGrader && askGrade != null ? live?.filteredToGrade : true;
+          if (live?.medianAsk != null && gradeOk) {
             scan.valuation.liveAsk = {
               median: live.medianAsk,
               low: live.askLow ?? null,
@@ -626,6 +764,7 @@ export class ScansService {
               grader: askGrader,
               grade: askGrade,
               printing: live.filteredToPrinting ? live.printing : null,
+              raw: !askGrader,
               otherPrintings: live.otherPrintings,
             };
           }
@@ -770,4 +909,140 @@ export class ScansService {
     }
     return (await res.json()) as VisionAnalyzeResponse;
   }
+}
+
+/** The card name a grading label prints, de-compounded for display.
+ *  OCR returns the label's condensed font glued together — "MEGACHARIZARDXeX"
+ *  — so the words are split back apart on the case boundaries. The label's
+ *  English name is preferred over a Japanese catalog name because it is what
+ *  the owner sees through the case, and what eBay sellers write in titles. */
+export function labelDisplayName(slab: { name?: string | null } | null | undefined): string | null {
+  const raw = slab?.name?.trim();
+  if (!raw || raw.length < 3) return null;
+  // a line that is just the rarity or the grade is not a name
+  if (/^(SPECIAL\s*ART\s*RARE|GEM\s*MT|GEMMT|MINT|[A-Z]{2,4}\s*\d)$/i.test(raw.replace(/\s+/g, " "))) {
+    return null;
+  }
+  // Not a general de-compounder: splitting on case boundaries turns
+  // "MEGACHARIZARDXeX" into "MEGACHARIZARD Xe X", which reads as a name, passes
+  // the usability check, and finds nothing. Only the two boundaries Pokemon
+  // names genuinely have are split — a known prefix and a known suffix — which
+  // is enough to recover "MEGA GENGAR ex" from "MEGAGENGAReX" without guessing
+  // where any other word begins.
+  const split = raw
+    .replace(/^(MEGA|DARK|SHINING|RADIANT|ORIGIN|PRIMAL)(?=[A-Z])/i, "$1 ")
+    .replace(/(?<=[A-Za-z]{3})(vmax|vstar|ex|gx|v)$/i, " $1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return split || null;
+}
+
+/** Is this name unusable as a search term?
+ *  Two ways it can be: written in a non-Latin script, or returned by OCR with
+ *  the spaces missing. Both find zero listings on a marketplace whose sellers
+ *  all write English. */
+export function needsEnglishName(name: string | null | undefined): boolean {
+  const n = (name ?? "").trim();
+  if (!n) return true;
+  if (/[^\u0000-\u007F]/.test(n)) return true;          // any non-ASCII script
+  // A run-together name is one with NO separator at all. Punctuation counts as
+  // a separator: "Portgas.D.Ace" is exactly how that card is written and eBay
+  // finds it, whereas "MEGACHARIZARDXeX" is OCR losing the spaces.
+  if (n.length > 12 && !/[\s.'’\-·&]/.test(n)) return true;
+  return false;
+}
+
+/** Build an identification for a sealed product straight off the label.
+ *  There is no catalog behind it, so the label IS the product record: year,
+ *  set, and what kind of sealed thing it is. */
+export function sealedIdentification(slab: {
+  year?: string | null;
+  setLine?: string | null;
+  name?: string | null;
+  setCandidates?: string[] | null;
+}): Identification {
+  // OCR returns these labels with the spaces gone ("JUNGLEFOILPACK"), and a
+  // run-together name searches for nothing. The product words are a closed set,
+  // so they can be split back out reliably rather than guessed at.
+  const PRODUCT = /(FOIL\s*PACK|BOOSTER\s*PACK|BOOSTER\s*BOX|BLISTER|ELITE\s*TRAINER\s*BOX|ETB|PACK|BOX|TIN)/gi;
+  const EDITION = /(1ST\s*EDITION|FIRST\s*EDITION|UNLIMITED|SHADOWLESS)/gi;
+  const title = (w: string) =>
+    w.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
+
+  const clean = (raw: string) =>
+    raw
+      .toUpperCase()
+      // OCR reads the 1 of "1ST" as a capital I
+      .replace(/\bIST\b/g, "1ST")
+      .replace(/[-–]/g, " ")
+      // normalise to the canonical spelling, so "JUNGLEFOILPACK" becomes
+      // "JUNGLE FOIL PACK" rather than "JUNGLE FOILPACK"
+      .replace(PRODUCT, (m) => ` ${m.replace(/\s+/g, "").replace(
+        /^(FOILPACK|BOOSTERPACK|BOOSTERBOX|ELITETRAINERBOX)$/,
+        (w) => ({ FOILPACK: "FOIL PACK", BOOSTERPACK: "BOOSTER PACK",
+                  BOOSTERBOX: "BOOSTER BOX", ELITETRAINERBOX: "ELITE TRAINER BOX" }[w] ?? w),
+      )} `)
+      .replace(EDITION, (m) => ` ${m} `)
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const raw of [slab.setLine, slab.name, ...(slab.setCandidates ?? [])]) {
+    if (!raw) continue;
+    for (const word of clean(String(raw)).split(" ")) {
+      // drop the grading furniture and the noise lines
+      if (!word || word.length < 2) continue;
+      // the brand is supplied once by the caller; the label repeats it
+      if (/^(GEM|MT|GEMMT|MINT|NM|PSA|BGS|CGC|SGC|WOTC|POKEMON|PKMN)$/.test(word)) continue;
+      if (seen.has(word)) continue;
+      seen.add(word);
+      parts.push(word);
+    }
+  }
+  // "1ST" alone reads as nothing; the label means 1st Edition
+  const words = parts.map((w) => (w === "1ST" ? "1ST EDITION" : w));
+  const name = title([slab.year, "Pokemon", ...words].filter(Boolean).join(" "))
+    .replace(/\b1st\b/gi, "1st");
+  return {
+    cardId: "sealed",
+    name,
+    setId: "",
+    setName: [slab.year, "sealed product"].filter(Boolean).join(" \u00b7 "),
+    localId: "",
+    rarity: null,
+    imageUrl: null,
+    matchScore: 1,
+    ocrName: name,
+    game: "pokemon",
+  };
+}
+
+/** The short rarity code sellers actually write, from the catalog's long name.
+ *  TCGdex says "Special illustration rare"; every eBay title says "SAR". */
+export function rarityToken(rarity: string | null | undefined): string | null {
+  const r = (rarity ?? "").toLowerCase();
+  if (!r) return null;
+  if (r.includes("special illustration")) return "SAR";
+  if (r.includes("illustration")) return "AR";
+  if (r.includes("hyper") || r.includes("ultra")) return "UR";
+  if (/^(sar|csr|chr|ssr|rrr|ur|ar|sr|rr|sec|secret)$/i.test(rarity ?? "")) {
+    return (rarity as string).toUpperCase();
+  }
+  return null;
+}
+
+/** The artwork named on a sealed pack's label.
+ *  Packs from one set carry different cover art and are priced separately: a
+ *  1999 Jungle Scyther pack and a Jungle Wigglytuff pack are not
+ *  interchangeable. The label prints it — "1ST EDITION - SCYTHER". */
+export function sealedArtwork(lines: (string | null | undefined)[]): string | null {
+  for (const raw of lines) {
+    if (!raw) continue;
+    const m = /(?:1ST|IST|2ND|UNLIMITED|EDITION)[^A-Z]*[-\u2013]\s*([A-Z][A-Z ]{2,20})$/i.exec(
+      String(raw).trim(),
+    );
+    if (m) return m[1].trim();
+  }
+  return null;
 }

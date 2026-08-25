@@ -136,8 +136,9 @@ type Scan = {
       high?: number | null;
       count: number;
       total: number;
-      grader: string;
-      grade: number;
+      grader?: string | null;
+      grade?: number | null;
+      raw?: boolean;
       printing?: string | null;
       otherPrintings?: { name: string; count: number; low: number; high: number }[];
     } | null;
@@ -1415,7 +1416,7 @@ type PriceView = {
    *  sold comps for it. An ask, clearly labelled as one — never a sale. */
   ask: {
     median: number; low?: number | null; high?: number | null;
-    count: number; grader: string; grade: number;
+    count: number; grader?: string | null; grade?: number | null; raw?: boolean;
     printing?: string | null;
     otherPrintings?: { name: string; count: number; low: number; high: number }[];
   } | null;
@@ -1484,13 +1485,17 @@ function priceView(scan: Scan): PriceView {
   // An asking price for the RIGHT grader and grade beats a completed sale from
   // the wrong one, so it outranks a cross-grader figure — but never a genuine
   // same-grader sale.
-  const headlineIsAsk = ask != null && (slabValue == null || crossGrader);
+  // A raw card's ask wins over the catalog's raw price when the ask is for a
+  // DIFFERENT printing than the catalog quotes: TCGplayer's $1.90 is the base
+  // SR of OP07-085, and this copy is the SP treatment at about $130.
+  const headlineIsAsk =
+    ask != null && (ask.raw ? Boolean(ask.printing) : slabValue == null || crossGrader);
 
   // A slabbed card is NEVER quoted at its raw price. That fallback is what put
   // A$2.78 above a One Piece BGS 9.5 whose own listings panel, on the same
   // screen, showed A$800-2,374. With no graded figure and no ask we say so and
   // show nothing — a blank is cheap, a wrong number is not.
-  const headline = slabGradeUnknown
+  const headline = slabGradeUnknown && !headlineIsAsk
     ? null
     : headlineIsAsk
       ? ask!.median
@@ -1501,7 +1506,9 @@ function priceView(scan: Scan): PriceView {
   const headlineUnit = headline === raw && !scan.slab ? rawUnit : "USD";
 
   const headlineLabel = headlineIsAsk
-    ? `median asking price · ${ask!.count} live ${ask!.grader} ${ask!.grade} listings`
+    ? `median asking price · ${ask!.count} live ${
+        ask!.grader && ask!.grade != null ? `${ask!.grader} ${ask!.grade}` : "ungraded"
+      } listings`
     : slabValue
       ? crossGrader
         ? `${scan.slab!.company} ${scan.slab!.gradeText} — priced at the nearest PSA tier`
@@ -1731,9 +1738,11 @@ function PriceHero({ scan }: { scan: Scan }) {
           <div className="ph-figure">
             <div className="label-mono accent-text">
               {pv.headlineIsAsk
-                ? `CURRENT ASKING PRICE · ${pv.ask!.grader} ${pv.ask!.grade}${
-                    pv.ask!.printing ? ` · ${pv.ask!.printing.toUpperCase()}` : ""
-                  }`
+                ? `CURRENT ASKING PRICE · ${
+                    pv.ask!.grader && pv.ask!.grade != null
+                      ? `${pv.ask!.grader} ${pv.ask!.grade}`
+                      : "UNGRADED"
+                  }${pv.ask!.printing ? ` · ${pv.ask!.printing.toUpperCase()}` : ""}`
                 : `ESTIMATED VALUE${pv.crossGrader ? " · CROSS-GRADER ESTIMATE" : ""}`}
             </div>
             <div className="ph-price">
@@ -1803,10 +1812,20 @@ function PriceHero({ scan }: { scan: Scan }) {
                 <>
                   <span className="badge warn">asking prices</span>
                   <span className="muted small">
-                    We hold no completed sales for a {pv.ask!.grader} {pv.ask!.grade}
-                    {pv.ask!.printing ? ` ${pv.ask!.printing}` : ""} of this card, so this
-                    is what sellers are asking today — not what one sold for. Sold prices
-                    usually land below the asks.
+                    {pv.ask!.raw ? (
+                      <>
+                        This is the <b>{pv.ask!.printing ?? "special"}</b> printing, which the
+                        catalog price above does not cover — it quotes the base print of the
+                        same card number.
+                      </>
+                    ) : (
+                      <>
+                        We hold no completed sales for a {pv.ask!.grader} {pv.ask!.grade}
+                        {pv.ask!.printing ? ` ${pv.ask!.printing}` : ""} of this card.
+                      </>
+                    )}{" "}
+                    This is what sellers are asking today — not what one sold for. Sold
+                    prices usually land below the asks.
                   </span>
                 </>
               ) : (
