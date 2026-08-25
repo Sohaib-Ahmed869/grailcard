@@ -234,3 +234,54 @@ def test_single_glyph_is_not_a_japanese_printing():
     # the Japanese Ace, likewise
     assert is_japanese("ポートガス・D・エース 白ひげ海賊団 自分のライフが3枚以下の場合")
     assert not is_japanese("Charizard Base Set 4/102 PSA 9")
+
+
+# ── a mangled year is not a card number ─────────────────────────────────────
+# PSA's "2021 POKEMON SWSH" came back from OCR as "2O2TPOKEMONSWSH" — 0 read as
+# O, 1 as T. The leading-digit rule fired on its 2, claimed the card number, and
+# the perfectly readable "#215" two tokens later never got a look. Evolving
+# Skies #2 is a Hoppip; #215 is the Umbreon VMAX alt art.
+
+def test_hash_number_beats_a_mangled_year():
+    from app.pipeline.identify import parse_slab
+
+    def t(text, top):
+        return {"text": text, "top": top}
+
+    texts = [
+        t("2O2TPOKEMONSWSH", 0.04),
+        t("#215", 0.04),
+        t("FA/UMBREONVMAX", 0.07),
+        t("GEMMT", 0.07),
+        t("EVOLVINGSKIES-SECRET", 0.10),
+        t("10", 0.07),
+        t("PSA", 0.10),
+        t("85183760", 0.10),
+    ]
+    slab = parse_slab(texts)
+    assert slab is not None
+    assert slab["cardNumber"] == "215", slab["cardNumber"]
+    # repairing the year also recovers it, and cleans it out of the set line
+    assert slab["year"] == "2021", slab["year"]
+    assert "POKEMON" in (slab["setLine"] or ""), slab["setLine"]
+    assert slab["grade"] == 10.0
+
+
+def test_a_leading_number_is_still_a_card_number_when_it_is_one():
+    from app.pipeline.identify import parse_slab
+
+    def t(text, top):
+        return {"text": text, "top": top}
+
+    # no "#" anywhere, and "100CHARIZARD" is genuinely card 100 — the fallback
+    # must still work, or the fix trades one wrong card for another
+    slab = parse_slab([
+        t("2006 POKEMON EX", 0.04),
+        t("100CHARIZARD", 0.07),
+        t("DRAGON FRONTIERS", 0.10),
+        t("GEM MT", 0.07),
+        t("10", 0.07),
+        t("12345678", 0.10),
+    ])
+    assert slab is not None
+    assert slab["cardNumber"] == "100", slab["cardNumber"]

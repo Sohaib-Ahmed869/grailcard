@@ -165,6 +165,34 @@ def parse_slab(texts: list) -> dict | None:
     # The label is the answer key: year + set + collector number identify a
     # graded card exactly, with no fuzzy name matching needed. Harvesting it
     # is the difference between "Charizard, some set" and one specific card.
+    def _looks_like_year(raw: str) -> bool:
+        """Is this line's leading number really a mangled year?
+
+        OCR confuses 0/O, 1/I/T/l and 5/S, so "2021 POKEMON SWSH" arrives as
+        "2O2TPOKEMONSWSH". Undo those substitutions before deciding: a four
+        character run that becomes a plausible year under them was a year.
+        """
+        head = raw[:4]
+        if len(head) < 4:
+            return False
+        fixed = head.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1",
+                                              "T": "1", "S": "5", "B": "8"}))
+        return bool(re.fullmatch(r"(19[6-9]\d|20[0-4]\d)", fixed))
+
+    def _repair_year(raw: str) -> str:
+        """Put the digits back into a mangled leading year.
+
+        The same substitutions that hid the year also left it in the set line:
+        "2O2TPOKEMONSWSH" yielded no year and the set read "O T POKEMONSWSH".
+        Repairing it recovers both, and is safe because it only rewrites a
+        four character prefix that becomes a real year and nothing else.
+        """
+        if not _looks_like_year(raw):
+            return raw
+        fixed = raw[:4].translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1",
+                                                 "T": "1", "S": "5", "B": "8"}))
+        return fixed + raw[4:]
+
     def _clean_label(raw: str) -> str:
         out = _LABEL_NOISE.sub(" ", _label_words(_YEAR_RE.sub(" ", raw)))
         return re.sub(r"\s{2,}", " ", out).strip(" -.")
@@ -172,8 +200,10 @@ def parse_slab(texts: list) -> dict | None:
     year = None
     set_line = None
     label_number = None
+    # a bare leading digit, held back in case a "#NNN" turns up on another line
+    loose_number = None
     for idx, t in enumerate(top_texts):
-        raw = t["text"].strip()
+        raw = _repair_year(t["text"].strip())
         m = _YEAR_RE.search(raw)
         if m and year is None:
             year = m.group(1)
@@ -191,11 +221,23 @@ def parse_slab(texts: list) -> dict | None:
                     if len(cand) >= 4 and sum(ch.isalpha() for ch in cand) >= 4:
                         set_line = cand
                         break
-        n = _LABEL_NUM_RE.search(raw) or (
-            None if _ORDINAL_RE.match(raw.strip()) else _LEADING_NUM_RE.search(raw)
-        )
-        if n and label_number is None:
-            label_number = n.group(1).lstrip("#").strip()
+        # A "#215" anywhere on the label outranks a bare leading digit
+        # anywhere else, no matter which line comes first. Taking whichever
+        # matched earliest read a PSA Umbreon VMAX #215 as card #2: OCR turned
+        # the year "2021" into "2O2T", the leading-digit rule fired on its 2,
+        # and the perfectly readable "#215" two tokens later never got a look.
+        # Evolving Skies #2 is a Hoppip.
+        hit = _LABEL_NUM_RE.search(raw)
+        if hit:
+            label_number = hit.group(1).lstrip("#").strip()
+        elif label_number is None and not _ORDINAL_RE.match(raw.strip()):
+            loose = _LEADING_NUM_RE.search(raw)
+            # ...and a mangled year is not a card number either
+            if loose and not _looks_like_year(raw):
+                loose_number = loose.group(1).strip()
+
+    if label_number is None and loose_number is not None:
+        label_number = loose_number
 
     # A year is a nice anchor but not a requirement: plenty of labels OCR
     # without a readable one, and bailing then throws away the set — which
