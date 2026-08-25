@@ -4,6 +4,9 @@ import { scanBudget } from "./budget.js";
 import { fetchListings } from "./ebaylistings.js";
 import { quotaStatus } from "./gradedprices.js";
 import { cardNews, marketPulse } from "./market.js";
+import { searchCards } from "./search.js";
+import { fetchGradedPrices } from "./gradedprices.js";
+import { readPrinting } from "./printing.js";
 
 @Controller("market")
 export class MarketController {
@@ -60,6 +63,91 @@ export class MarketController {
         language: lang === "en" || lang === "ja" || lang === "zh" ? lang : null,
       })) ?? empty
     );
+  }
+
+  // Search by name, for when the card is not in front of you.
+  @Get("search")
+  async search(@Query("q") q?: string, @Query("limit") limit?: string) {
+    if (!q || q.trim().length < 2) return { query: q ?? "", results: [] };
+    const n = Number(limit);
+    return {
+      query: q,
+      results: await searchCards(q, Number.isFinite(n) ? Math.min(n, 40) : 24),
+    };
+  }
+
+  // Price a card chosen from search results.
+  //
+  // Deliberately the same chain a scan uses — sold comps for the exact grader
+  // and grade first, live asks for the exact printing second — because a scan
+  // and a search that land on the same card must not quote two prices for it.
+  @Get("price")
+  async price(
+    @Query("name") name?: string,
+    @Query("set") setName?: string,
+    @Query("number") number?: string,
+    @Query("grader") grader?: string,
+    @Query("grade") grade?: string,
+    @Query("printing") printing?: string,
+    @Query("lang") lang?: string,
+  ) {
+    if (!name) return { error: "name required" };
+    const g = grade != null && grade !== "" ? Number(grade) : null;
+    const grade_ = Number.isFinite(g) ? (g as number) : null;
+
+    const ppt = await fetchGradedPrices(name, number ?? null, setName ?? null);
+    const sold =
+      grader && grade_ != null
+        ? ppt.byGrader?.[grader.toUpperCase()]?.[String(grade_).replace(/\.0$/, "")] ?? null
+        : null;
+
+    // Asks fill a gap; they never displace a real figure. For a GRADED card
+    // that gap is "no completed sale at this grade". For an ungraded one the
+    // raw market price already answers the question, and asks are only right
+    // when the copy is a printing that price does not cover — the same rule
+    // the scan path follows, so the two agree.
+    const raw = ppt.rawUsd ?? null;
+    const specialPrinting = Boolean(printing && readPrinting(printing).family);
+    const wantAsks =
+      grader && grade_ != null ? sold?.price == null : raw == null || specialPrinting;
+
+    const live =
+      wantAsks
+        ? await fetchListings({
+            name,
+            setName: setName ?? null,
+            number: number ?? null,
+            grader: grader ?? null,
+            grade: grade_,
+            printingHint: printing ?? null,
+            language: lang === "en" || lang === "ja" || lang === "zh" ? lang : null,
+            japanese: lang === "ja",
+          })
+        : null;
+
+    return {
+      name,
+      setName: setName ?? null,
+      number: number ?? null,
+      grader: grader ?? null,
+      grade: grade_,
+      rawUsd: raw,
+      byGrader: ppt.byGrader ?? null,
+      sold,
+      liveAsk:
+        live?.medianAsk != null
+          ? {
+              median: live.medianAsk,
+              low: live.askLow,
+              high: live.askHigh,
+              count: live.listings.length,
+              printing: live.filteredToPrinting ? live.printing : null,
+              staleCeilingDays: live.cappedByStale ? live.staleCeilingDays : null,
+            }
+          : null,
+      listings: live?.listings ?? [],
+      printingRead: printing ? readPrinting(printing) : null,
+    };
   }
 
   @Get("fx")

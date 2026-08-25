@@ -1910,3 +1910,63 @@ button.primary:disabled {
   font-feature-settings: "palt" 1;
 }
 .identity-local { margin-bottom: 4px; }
+
+/* ── search by name ─────────────────────────────────────────────────────────
+   Folded away by default: scanning is the main act, and an always-open search
+   form competes with it for the eye. */
+.search-panel {
+  max-width: 900px; margin: 0 auto 24px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel, transparent); overflow: hidden;
+}
+.search-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; background: none; border: 0; cursor: pointer;
+  text-align: left; color: inherit; font: inherit;
+}
+.search-toggle:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.search-body { padding: 0 16px 16px; }
+.search-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-input {
+  flex: 1; min-width: 0; padding: 10px 13px; font: inherit; font-size: 14px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--bg); color: var(--text);
+}
+.search-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.search-results {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 7px; max-height: 340px; overflow-y: auto; padding-right: 3px;
+}
+.search-hit {
+  display: flex; gap: 10px; align-items: center; text-align: left;
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px;
+  background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.search-hit:hover { border-color: var(--accent); }
+.search-hit.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.search-hit img, .search-noimg {
+  width: 34px; height: 47px; object-fit: cover; border-radius: 3px; flex: 0 0 34px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.search-hit-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.search-hit-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.search-hit-local { font-size: 11px; color: var(--muted); }
+.search-hit-meta { font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+
+.search-price {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.search-price-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.search-grade { display: flex; gap: 6px; }
+.search-grade select {
+  padding: 6px 9px; font: inherit; font-size: 12.5px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--text); cursor: pointer;
+}

@@ -1695,6 +1695,215 @@ function GraderTabs({ scan, pv }: { scan: Scan; pv: PriceView }) {
   );
 }
 
+
+/* ── search by name ──────────────────────────────────────────────────────────
+   Scanning answers "what is this card in front of me". Search answers "what is
+   this worth" when it is not — a want list, a deal over the phone, a collection
+   being valued off a spreadsheet.
+
+   Search resolves to the same catalog identity a scan resolves to and prices it
+   through the same chain, because a scan and a search that land on the same card
+   must not quote two different figures for it. */
+
+type SearchHit = {
+  cardId: string; name: string; nameLocal: string | null;
+  setId: string; setName: string; localId: string;
+  rarity: string | null; imageUrl: string | null; game: string; score: number;
+};
+
+type PriceResult = {
+  name: string; setName: string | null; number: string | null;
+  grader: string | null; grade: number | null;
+  rawUsd: number | null;
+  byGrader: Record<string, Record<string, { price?: number | null; count?: number | null; confidence?: string | null }>> | null;
+  sold: { price?: number | null; count?: number | null; confidence?: string | null } | null;
+  liveAsk: {
+    median: number; low: number | null; high: number | null; count: number;
+    printing: string | null; staleCeilingDays: number | null;
+  } | null;
+  listings: Listing[];
+};
+
+const GRADE_CHOICES = ["10", "9.5", "9", "8.5", "8", "7", "6", "5"];
+
+function SearchPanel() {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [picked, setPicked] = useState<SearchHit | null>(null);
+  const [grader, setGrader] = useState("PSA");
+  const [grade, setGrade] = useState("10");
+  const [price, setPrice] = useState<PriceResult | null>(null);
+  const [pricing, setPricing] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  async function run(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (q.trim().length < 2) return;
+    setState("loading"); setPicked(null); setPrice(null);
+    try {
+      const r = await fetch(`${API}/market/search?q=${encodeURIComponent(q)}&limit=24`);
+      const j = await r.json();
+      setHits(j.results ?? []); setState("done");
+    } catch { setState("error"); }
+  }
+
+  // The grader and grade are part of the question, so changing either asks it
+  // again rather than leaving a stale figure on screen under a new label.
+  useEffect(() => {
+    if (!picked) return;
+    let alive = true;
+    setPricing(true); setPrice(null);
+    const p = new URLSearchParams({ name: picked.name });
+    if (picked.setName) p.set("set", picked.setName);
+    if (picked.localId) p.set("number", picked.localId);
+    if (grader !== "Ungraded") { p.set("grader", grader); p.set("grade", grade); }
+    if (picked.nameLocal) p.set("lang", "ja");
+    fetch(`${API}/market/price?${p}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive) { setPrice(j); setPricing(false); } })
+      .catch(() => alive && setPricing(false));
+    return () => { alive = false; };
+  }, [picked, grader, grade]);
+
+  const figure = price?.sold?.price ?? price?.liveAsk?.median ?? price?.rawUsd ?? null;
+  const isSold = price?.sold?.price != null;
+  const isAsk = !isSold && price?.liveAsk?.median != null;
+
+  return (
+    <section className={`search-panel ${open ? "open" : ""}`}>
+      <button className="search-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="label-mono accent-text">SEARCH BY NAME</span>
+        <span className="muted small">
+          {open ? "hide" : "price a card without scanning it"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="search-body">
+          <form className="search-row" onSubmit={run}>
+            <input
+              className="search-input"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Card name, or a code like OP13-119"
+              aria-label="Card name"
+            />
+            <button className="primary" type="submit" disabled={q.trim().length < 2 || state === "loading"}>
+              {state === "loading" ? "Searching…" : "Search"}
+            </button>
+          </form>
+
+          {state === "error" && <p className="note">Search is unavailable right now.</p>}
+          {state === "done" && hits?.length === 0 && (
+            <p className="note">
+              Nothing matched “{q}”. Try the card&apos;s printed name, or its number.
+            </p>
+          )}
+
+          {hits && hits.length > 0 && (
+            <div className="search-results">
+              {hits.map((h) => (
+                <button
+                  key={h.cardId}
+                  className={`search-hit ${picked?.cardId === h.cardId ? "on" : ""}`}
+                  onClick={() => setPicked(h)}
+                >
+                  {h.imageUrl
+                    ? <img src={h.imageUrl} alt="" loading="lazy" />
+                    : <span className="search-noimg" />}
+                  <span className="search-hit-text">
+                    <span className="search-hit-name">{h.name}</span>
+                    {h.nameLocal && <span className="search-hit-local" lang="ja">{h.nameLocal}</span>}
+                    <span className="search-hit-meta">
+                      {[h.setName || h.setId, h.localId ? `#${h.localId}` : null, h.rarity]
+                        .filter(Boolean).join(" · ")}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {picked && (
+            <div className="search-price">
+              <div className="search-price-head">
+                <div>
+                  <div className="search-hit-name">{picked.name}</div>
+                  <div className="muted small">
+                    {[picked.setName, picked.localId ? `#${picked.localId}` : null]
+                      .filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                <div className="search-grade">
+                  <select value={grader} onChange={(e) => setGrader(e.target.value)} aria-label="Grading company">
+                    {["Ungraded", "PSA", "BGS", "CGC", "SGC", "TAG", "ACE"].map((g) => (
+                      <option key={g} value={g}>{g === "BGS" ? "BECKETT" : g}</option>
+                    ))}
+                  </select>
+                  {grader !== "Ungraded" && (
+                    <select value={grade} onChange={(e) => setGrade(e.target.value)} aria-label="Grade">
+                      {GRADE_CHOICES.map((g) => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {pricing && <p className="note">Pricing…</p>}
+
+              {!pricing && figure != null && (
+                <>
+                  <div className="label-mono accent-text">
+                    {isSold ? `LAST SOLD · ${grader} ${grade}`
+                      : isAsk ? `CURRENT ASKING PRICE · ${grader === "Ungraded" ? "UNGRADED" : `${grader} ${grade}`}`
+                      : "UNGRADED MARKET PRICE"}
+                  </div>
+                  <div className="ph-price">
+                    <Money v={figure} unit="USD" showSource={false} />
+                    <span className="ph-est-tag">{isSold ? "sold" : isAsk ? "asking" : "market"}</span>
+                  </div>
+                  <div className="muted small ph-sub">
+                    {isSold && (
+                      <>
+                        {price!.sold!.count} completed sales
+                        {price!.sold!.confidence ? ` · ${price!.sold!.confidence} confidence` : ""}
+                      </>
+                    )}
+                    {isAsk && (
+                      <>
+                        {price!.liveAsk!.count} live listings
+                        {price!.liveAsk!.printing ? ` · matched to ${price!.liveAsk!.printing}` : ""}
+                        {price!.liveAsk!.staleCeilingDays
+                          ? ` · held to an ask unsold ${price!.liveAsk!.staleCeilingDays} days`
+                          : ""}
+                      </>
+                    )}
+                    {!isSold && !isAsk && "market price for an ungraded copy"}
+                  </div>
+                  {price?.rawUsd != null && figure !== price.rawUsd && (
+                    <div className="muted small ph-sub">
+                      raw, ungraded <b style={{ color: "var(--text)" }}>
+                        <Money v={price.rawUsd} unit="USD" showSource={false} />
+                      </b>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {!pricing && figure == null && (
+                <p className="note">
+                  No price reaches us for a {grader === "Ungraded" ? "raw copy" : `${grader} ${grade}`} of
+                  this card. Try another grade, or scan the card itself.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PriceHero({ scan }: { scan: Scan }) {
   const pv = priceView(scan);
   const { code } = useCurrency();
@@ -2320,11 +2529,13 @@ function HomeInner() {
           <span className="muted small"> · first scan after a quiet spell takes longer while the server wakes</span>
         )}
       </div>
-      <div className="scan-actions" style={{ marginBottom: 24 }}>
+      <div className="scan-actions" style={{ marginBottom: 16 }}>
         <button className="primary" disabled={!front || busy} onClick={runScan}>
           {busy ? "Scanning…" : "Scan card"}
         </button>
       </div>
+
+      <SearchPanel />
 
       {error && (
         <div className="panel">
