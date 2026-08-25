@@ -676,8 +676,14 @@ export class ScansService {
     // quotes the base print: the plain SR of OP07-085 is $1.90, and the SP
     // treatment of the identical card number is about $130. Quoting $1.90 for
     // the SP is the same error as quoting a raw price for a slab.
+    // A raw card needs a card NUMBER before its listings mean anything. The
+    // number is what makes a search specific; without it "Charizard Base Set
+    // 1st Edition" matches a category, and a stale $8.95 listing in that
+    // category capped a raw Base Set Charizard that TCGplayer prices at $489.
     const rawSpecialPrinting =
-      !askGrader && Boolean(readPrinting(printingHints.join(" ")).family);
+      !askGrader &&
+      Boolean(readPrinting(printingHints.join(" ")).family) &&
+      Boolean(scan.identification?.localId);
     if (
       scan.valuation &&
       ((askGrader && askGrader !== "UNKNOWN" && askGrade != null) || rawSpecialPrinting)
@@ -751,7 +757,14 @@ export class ScansService {
             grader: askGrader,
             grade: askGrade,
             limit: 24,
-            printingHint: [...printingHints, scan.identification.rarity ?? ""].join(" "),
+            // the identified name is itself evidence of the printing, and it
+            // is the repaired form: the raw label says "IST -SCYTHER" where
+            // the name says "1st Edition", and only one of those matches
+            printingHint: [
+              ...printingHints,
+              scan.identification.name,
+              scan.identification.rarity ?? "",
+            ].join(" "),
             japanese: scan.origin?.japaneseTextDetected ?? false,
             // English is a positive fact about the printing, not a default
             language: scan.origin?.language === "en" ? "en" : null,
@@ -1038,7 +1051,12 @@ export function sealedIdentification(slab: {
     raw
       .toUpperCase()
       // OCR reads the 1 of "1ST" as a capital I
-      .replace(/\bIST\b/g, "1ST")
+      // OCR reads the 1 of "1ST" as a capital I, and the label glues the
+      // words together, so a \b anchor here never fired: one scan of the
+      // Jungle pack named it "1st Edition" and the next "Istedition",
+      // which then priced against Unlimited packs — $1,400 and $1,000 for
+      // the same photograph.
+      .replace(/\bIST(?=\b|EDITION)/g, "1ST")
       .replace(/[-–]/g, " ")
       // normalise to the canonical spelling, so "JUNGLEFOILPACK" becomes
       // "JUNGLE FOIL PACK" rather than "JUNGLE FOILPACK"
@@ -1047,7 +1065,12 @@ export function sealedIdentification(slab: {
         (w) => ({ FOILPACK: "FOIL PACK", BOOSTERPACK: "BOOSTER PACK",
                   BOOSTERBOX: "BOOSTER BOX", ELITETRAINERBOX: "ELITE TRAINER BOX" }[w] ?? w),
       )} `)
-      .replace(EDITION, (m) => ` ${m} `)
+      // normalise the match, not just space around it: "1STEDITION" left
+      // as it stands is still one word and still unreadable
+      .replace(EDITION, (m) => {
+        const w = m.replace(/\s+/g, "");
+        return ` ${{ "1STEDITION": "1ST EDITION", FIRSTEDITION: "1ST EDITION" }[w] ?? w} `;
+      })
       .replace(/\s{2,}/g, " ")
       .trim();
 
@@ -1065,8 +1088,11 @@ export function sealedIdentification(slab: {
       parts.push(word);
     }
   }
-  // "1ST" alone reads as nothing; the label means 1st Edition
-  const words = parts.map((w) => (w === "1ST" ? "1ST EDITION" : w));
+  // "1ST" alone reads as nothing; the label means 1st Edition. Only when the
+  // word is not already there, or a label that spelled it out becomes
+  // "1st Edition Edition".
+  const hasEdition = parts.includes("EDITION");
+  const words = parts.map((w) => (w === "1ST" && !hasEdition ? "1ST EDITION" : w));
   const name = title([slab.year, "Pokemon", ...words].filter(Boolean).join(" "))
     .replace(/\b1st\b/gi, "1st");
   return {
