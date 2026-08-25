@@ -1896,3 +1896,8 @@ button.primary:disabled {
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
   border-radius: 999px; padding: 1px 7px;
 }
+
+/* how long an ask has stood. A listing up for months is priced above market by
+   proof, and that is worth seeing next to the price. */
+.listing-age { font-size: 10.5px; color: var(--muted); }
+.listing-age.stale { color: var(--warn, #b4762a); }

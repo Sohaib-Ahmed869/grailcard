@@ -36,11 +36,13 @@ export class MarketController {
     @Query("grade") grade?: string,
     @Query("printing") printing?: string,
     @Query("ja") ja?: string,
+    @Query("lang") lang?: string,
   ) {
     const empty = {
       listings: [], total: 0, matched: 0, trimmed: 0, query: name ?? "", filteredToGrade: false,
       medianAsk: null, askLow: null, askHigh: null,
       printing: null, filteredToPrinting: false, otherPrintings: [],
+      staleCeiling: null, staleCeilingDays: null, cappedByStale: false,
     };
     if (!name) return empty;
     const g = grade != null && grade !== "" ? Number(grade) : null;
@@ -55,6 +57,7 @@ export class MarketController {
         // two disagree on screen for reasons no reader can see
         printingHint: printing ?? null,
         japanese: ja === "1" || ja === "true",
+        language: lang === "en" || lang === "ja" || lang === "zh" ? lang : null,
       })) ?? empty
     );
   }

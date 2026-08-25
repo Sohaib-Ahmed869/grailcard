@@ -140,6 +140,9 @@ type Scan = {
       grade?: number | null;
       raw?: boolean;
       printing?: string | null;
+      staleCeiling?: number | null;
+      staleCeilingDays?: number | null;
+      cappedByStale?: boolean;
       otherPrintings?: { name: string; count: number; low: number; high: number }[];
     } | null;
   } | null;
@@ -1418,6 +1421,7 @@ type PriceView = {
     median: number; low?: number | null; high?: number | null;
     count: number; grader?: string | null; grade?: number | null; raw?: boolean;
     printing?: string | null;
+    staleCeiling?: number | null; staleCeilingDays?: number | null; cappedByStale?: boolean;
     otherPrintings?: { name: string; count: number; low: number; high: number }[];
   } | null;
   /** true when the headline figure is an asking price, not a completed sale */
@@ -1776,6 +1780,18 @@ function PriceHero({ scan }: { scan: Scan }) {
                 </b>
               </div>
             )}
+            {pv.headlineIsAsk && pv.ask!.cappedByStale && pv.ask!.staleCeiling != null && (
+              <div className="muted small ph-sub">
+                Held down to the cheapest ask that has <b>failed to sell</b>: a copy has
+                been listed at{" "}
+                <b style={{ color: "var(--text)" }}>
+                  <Money v={pv.ask!.staleCeiling} unit="USD" showSource={false} />
+                </b>{" "}
+                for {pv.ask!.staleCeilingDays} days with no buyer, so the market is below
+                that. Asking prices drift upward on their own — the copies that sell
+                disappear from the listings, and the overpriced ones stay.
+              </div>
+            )}
             {pv.headlineIsAsk && (pv.ask!.otherPrintings?.length ?? 0) > 0 && (
               <details className="printing-note">
                 <summary>
@@ -1925,6 +1941,7 @@ type Listing = {
   imageUrl: string | null; url: string; seller: string | null;
   grader: string | null; grade: number | null;
   printing: string | null;
+  ageDays?: number | null;
   printingMatch?: "match" | "conflict" | "unknown";
 };
 
@@ -1949,6 +1966,7 @@ function LiveListings({ scan }: { scan: Scan }) {
     // and the figure above it disagree, and nothing on screen explains why.
     if (v?.liveAsk?.printing) q.set("printing", v.liveAsk.printing);
     if (scan.origin?.japaneseTextDetected) q.set("ja", "1");
+    else if (scan.origin?.language === "en") q.set("lang", "en");
     let alive = true;
     fetch(`${API}/market/listings?${q}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -2016,6 +2034,13 @@ function LiveListings({ scan }: { scan: Scan }) {
                     <span className="listing-grade">{l.grader} {l.grade}</span>
                   )}
                   {l.printing && <span className="listing-printing">{l.printing}</span>}
+                  {l.ageDays != null && (
+                    <span className={l.ageDays >= 60 ? "listing-age stale" : "listing-age"}>
+                      {l.ageDays === 0
+                        ? "listed today"
+                        : `listed ${l.ageDays} day${l.ageDays === 1 ? "" : "s"} ago`}
+                    </span>
+                  )}
                   {l.condition && <span>{l.condition}</span>}
                 </div>
               </div>

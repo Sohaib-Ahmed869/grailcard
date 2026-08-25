@@ -49,10 +49,11 @@ test("Pokemon printing splits are read the same way", () => {
   assert.equal(readPrinting("Charizard Base Set Shadowless PSA 8").family, "shadowless");
   assert.equal(readPrinting("Pikachu 1st Edition Jungle PSA 9").family, "1st");
   assert.equal(readPrinting("Umbreon Reverse Holo SWSH PSA 10").family, "reverse");
-  // Unlimited vs Shadowless is exactly the trap this exists to stop
+  // Unlimited vs Shadowless is exactly the trap this exists to stop, and both
+  // are now modelled, so the pair is a flat conflict rather than a shrug
   assert.equal(
     comparePrinting(readPrinting("Charizard Shadowless"), readPrinting("Charizard Unlimited")),
-    "unknown", // "Unlimited" declares no family we model; it must not read as a match
+    "conflict",
   );
 });
 
@@ -106,4 +107,13 @@ test("a booster box is not a booster pack", () => {
   assert.equal(readPrinting("Pokemon Elite Trainer Box sealed").form, "box");
   // a single card names no form at all
   assert.equal(readPrinting("Charizard Base Set 4/102 PSA 9").form, null);
+});
+
+test("Unlimited is a printing, not the absence of one", () => {
+  const first = readPrinting("1999 Pokemon Jungle Foil Pack 1st Edition Scyther PSA 10");
+  const unl   = readPrinting("1999 Pokemon Jungle Pack Wigglytuff Unlimited PSA 10 GEM MINT");
+  assert.equal(first.family, "1st");
+  assert.equal(unl.family, "unlimited");
+  // left unmatched, a 179-day-old Unlimited listing set the ceiling for a 1st Ed card
+  assert.equal(comparePrinting(first, unl), "conflict");
 });

@@ -29,6 +29,11 @@ const FAMILIES: [string, RegExp][] = [
   // "Wanted Poster", "Wanted SP" — one line, written many ways
   ["wanted", /wanted/i],
   ["shadowless", /shadowless/i],
+  // Unlimited is a printing, not the absence of one. A 1999 Jungle Unlimited
+  // pack and a 1st Edition pack are different products, and leaving Unlimited
+  // unmatched let a 179-day-old Unlimited listing set the ceiling for a 1st
+  // Edition card.
+  ["unlimited", /unlimited/i],
   ["1st", /\b(1st|first)\s*ed(ition)?\b/i],
   ["reverse", /\b(reverse|rev)\s*(holo|foil)\b/i],
   ["staff", /\bstaff\b/i],
@@ -129,7 +134,8 @@ export function describePrinting(p: Printing): string | null {
   if (p.family) {
     parts.push(
       { manga: "Manga Art", parallel: "Parallel", wanted: "Wanted Poster",
-        shadowless: "Shadowless", "1st": "1st Edition", reverse: "Reverse Holo",
+        shadowless: "Shadowless", "1st": "1st Edition", unlimited: "Unlimited",
+        reverse: "Reverse Holo",
         staff: "Staff", sp: "SP" }[p.family] ?? p.family,
     );
   }

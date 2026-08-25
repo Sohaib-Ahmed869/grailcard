@@ -689,7 +689,15 @@ export class ScansService {
       // What the label and the card print, over and above the name.
       const askTokens = [
         codeRead?.code,
-        codeRead?.rarity ?? rarityToken(scan.identification?.rarity),
+        // A rarity token only helps when it tells the printings apart. On a
+        // Japanese Pokemon card "SAR" is exactly the discriminator; on this One
+        // Piece card the base print and the SP treatment are BOTH "SR", so
+        // adding it stopped discriminating and started skewing — the search
+        // filled with $2 base copies and pushed the $130 SP ones out.
+        codeRead?.rarity ??
+          (readPrinting(printingHints.join(" ")).family
+            ? null
+            : rarityToken(scan.identification?.rarity)),
         // a One Piece treatment marker printed flush against the number
         treatment,
         // for a sealed pack the artwork IS the product: a Scyther Jungle pack
@@ -745,6 +753,8 @@ export class ScansService {
             limit: 24,
             printingHint: [...printingHints, scan.identification.rarity ?? ""].join(" "),
             japanese: scan.origin?.japaneseTextDetected ?? false,
+            // English is a positive fact about the printing, not a default
+            language: scan.origin?.language === "en" ? "en" : null,
             extraTokens: askTokens,
           });
           // filteredToGrade is the condition, not a nicety: an unfiltered median
@@ -765,6 +775,9 @@ export class ScansService {
               grade: askGrade,
               printing: live.filteredToPrinting ? live.printing : null,
               raw: !askGrader,
+              staleCeiling: live.staleCeiling,
+              staleCeilingDays: live.staleCeilingDays,
+              cappedByStale: live.cappedByStale,
               otherPrintings: live.otherPrintings,
             };
           }

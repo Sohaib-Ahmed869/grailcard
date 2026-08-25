@@ -197,6 +197,12 @@ export const Valuation = z.object({
       raw: z.boolean().default(false),
       /** the printing these figures are for — a card number is not a product */
       printing: z.string().nullish(),
+      /** cheapest ask that has stood unsold long enough to prove the market is
+       *  below it, and how many days it has stood */
+      staleCeiling: z.number().nullish(),
+      staleCeilingDays: z.number().nullish(),
+      /** true when that ceiling pulled the headline figure down */
+      cappedByStale: z.boolean().default(false),
       /** printings of the same number we excluded, with their asking ranges */
       otherPrintings: z
         .array(z.object({

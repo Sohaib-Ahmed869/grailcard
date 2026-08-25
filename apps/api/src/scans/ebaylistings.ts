@@ -25,6 +25,9 @@ export type Listing = {
   grade: number | null;
   /** printing named in the title, e.g. "Manga Art · Alt Art · Japanese" */
   printing: string | null;
+  /** days this listing has been up unsold. The single most useful number on a
+   *  listing: one that has sat for months is priced above market by proof. */
+  ageDays: number | null;
   /** how that printing compares to the card we scanned */
   printingMatch: "match" | "conflict" | "unknown";
 };
@@ -39,6 +42,12 @@ export type ListingResult = {
   matched: number;
   /** how many extreme listings were trimmed before taking the median */
   trimmed: number;
+  /** Cheapest ask that has gone unsold long enough to be evidence. Nobody has
+   *  bought the card at this price in months, so the market sits below it. */
+  staleCeiling: number | null;
+  staleCeilingDays: number | null;
+  /** true when the ceiling forced the headline figure down */
+  cappedByStale: boolean;
   /** median asking price of what survived filtering — a figure, not just a list.
    *  Median rather than mean: one aspirational listing should not move it. */
   medianAsk: number | null;
@@ -60,6 +69,11 @@ export type ListingResult = {
  *  do the most damage to a median. */
 const NOT_ONE_CARD =
   /\b(lot|lots|bundle|bulk|collection|joblot|job lot|break|breaks|random|mystery|repack|custom|proxy|proxies|reprint|orica|digital|read desc|damaged|cracked|scratched|reholder|empty|case only|sleeve|toploader|binder|playset|\d{2,}\s*cards?)\b|\b(art|complete|full|master|sequential)\s+set\b|\bsequential\b/i;
+
+/** How long an ask must stand before its failure to sell is evidence.
+ *  eBay fixed-price listings renew automatically, so two full months is a
+ *  listing that has been seen by the whole market and refused by it. */
+const STALE_DAYS = 60;
 
 const cache = new Map<string, { at: number; v: ListingResult }>();
 let token: { value: string; expires: number } | null = null;
@@ -116,6 +130,10 @@ export async function fetchListings(opts: {
   printingHint?: string | null;
   /** true when the card carries Japanese text */
   japanese?: boolean;
+  /** the printing's language, where we could read it off the card. English is
+   *  as much a fact as Japanese here: without it a 252-day-old CHINESE listing
+   *  at $51 set the ceiling for an English card worth about $130. */
+  language?: "en" | "ja" | "zh" | null;
   /** printed identifiers that narrow the search harder than a name does: a set
    *  code ("M2"), a rarity suffix ("SAR"), a treatment ("SP"), a sealed pack's
    *  artwork ("Scyther"). These are what sellers type into their titles. */
@@ -160,7 +178,8 @@ export async function fetchListings(opts: {
   if (!query) return null;
 
   const cardPrinting: Printing = readPrinting(opts.printingHint);
-  if (opts.japanese && !cardPrinting.language) cardPrinting.language = "ja";
+  if (opts.japanese) cardPrinting.language = "ja";
+  else if (opts.language && !cardPrinting.language) cardPrinting.language = opts.language;
   const key = `${query}|${show}|${cardPrinting.family ?? ""}|${cardPrinting.language ?? ""}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.v;
@@ -172,7 +191,8 @@ export async function fetchListings(opts: {
     recordUsage("ebay");
     const url =
       `${EBAY}/buy/browse/v1/item_summary/search?q=${encodeURIComponent(query)}` +
-      `&limit=${limit}`;
+      // EXTENDED carries itemCreationDate, which is how long the ask has stood
+      `&limit=${limit}&fieldgroups=EXTENDED`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${tok}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
       signal: AbortSignal.timeout(15000),
@@ -200,6 +220,9 @@ export async function fetchListings(opts: {
         grade,
         printing: describePrinting(p),
         printingMatch: comparePrinting(cardPrinting, p),
+        ageDays: it.itemCreationDate
+          ? Math.max(0, Math.round((Date.now() - Date.parse(it.itemCreationDate)) / 86_400_000))
+          : null,
       };
     });
 
@@ -287,12 +310,32 @@ export async function fetchListings(opts: {
     // enough samples to afford it we cut a tenth off each end first.
     const cut = all.length >= 8 ? Math.floor(all.length * 0.1) : 0;
     const values = cut > 0 ? all.slice(cut, all.length - cut) : all;
-    const median =
+    const rawMedian =
       values.length === 0
         ? null
         : values.length % 2
           ? values[(values.length - 1) / 2]
           : (values[values.length / 2 - 1] + values[values.length / 2]) / 2;
+
+    // What a listing FAILS to do is information too.
+    //
+    // The pool of live asks is survivorship-biased upward: a copy priced at
+    // market sells and leaves, while one priced above market stays, renews, and
+    // accumulates. Read naively the pool therefore drifts above the real price
+    // — on a One Piece Ace the median ask was a listing that had sat unsold for
+    // 199 days, quoted as the card's value against a A$1,000 sale.
+    //
+    // But an ask that has stood for two months without a buyer is proof the
+    // market is below it. The cheapest such ask is the tightest upper bound the
+    // live pool can give us, and it is a fact about this card rather than a
+    // discount applied to one.
+    const stale = priced
+      .filter((l) => (l.ageDays ?? 0) >= STALE_DAYS && l.price != null)
+      .sort((a, b) => (a.price as number) - (b.price as number));
+    const ceilingListing = stale[0] ?? null;
+    const staleCeiling = ceilingListing?.price ?? null;
+    const cappedByStale = rawMedian != null && staleCeiling != null && staleCeiling < rawMedian;
+    const median = cappedByStale ? staleCeiling : rawMedian;
 
     const v: ListingResult = {
       listings: priced.slice(0, show),
@@ -304,6 +347,9 @@ export async function fetchListings(opts: {
       askLow: values[0] ?? null,
       askHigh: values[values.length - 1] ?? null,
       trimmed: cut > 0 ? cut * 2 : 0,
+      staleCeiling,
+      staleCeilingDays: ceilingListing?.ageDays ?? null,
+      cappedByStale,
       printing: describePrinting(cardPrinting),
       filteredToPrinting,
       otherPrintings,
