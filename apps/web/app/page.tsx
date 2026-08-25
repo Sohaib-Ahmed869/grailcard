@@ -1873,11 +1873,26 @@ function SearchPanel() {
           {picked && (
             <div className="search-price">
               <div className="search-price-head">
-                <div>
-                  <div className="search-hit-name">{picked.name}</div>
-                  <div className="muted small">
-                    {[picked.setName, picked.localId ? `#${picked.localId}` : null]
-                      .filter(Boolean).join(" · ")}
+                <div className="search-picked">
+                  {/* The catalog image where there is one. Where there is not —
+                      a card no catalog of ours covers — a listing photo is the
+                      only picture of it that exists, and seeing the card is how
+                      you check we are pricing the right one. */}
+                  {(picked.imageUrl ?? price?.listings?.find((l) => l.imageUrl)?.imageUrl) ? (
+                    <img
+                      className="search-picked-img"
+                      src={picked.imageUrl ?? price!.listings.find((l) => l.imageUrl)!.imageUrl!}
+                      alt={picked.name}
+                    />
+                  ) : (
+                    <span className="search-picked-img placeholder" aria-hidden="true" />
+                  )}
+                  <div>
+                    <div className="search-hit-name">{picked.name}</div>
+                    <div className="muted small">
+                      {[picked.setName, picked.localId ? `#${picked.localId}` : null]
+                        .filter(Boolean).join(" · ")}
+                    </div>
                   </div>
                 </div>
                 <div className="search-grade">
@@ -1940,6 +1955,32 @@ function SearchPanel() {
                   No price reaches us for a {grader === "Ungraded" ? "raw copy" : `${grader} ${grade}`} of
                   this card. Try another grade, or scan the card itself.
                 </p>
+              )}
+
+              {!pricing && (price?.listings?.length ?? 0) > 0 && (
+                <div className="search-listings">
+                  <div className="label-mono">WHAT THESE ARE</div>
+                  {price!.listings.slice(0, 6).map((l) => (
+                    <a key={l.url} className="search-listing" href={l.url} target="_blank" rel="noreferrer">
+                      {l.imageUrl && <img src={l.imageUrl} alt="" loading="lazy" />}
+                      <span className="search-listing-text">
+                        <span className="search-listing-title">{l.title}</span>
+                        <span className="search-listing-meta">
+                          {[
+                            l.grader && l.grade != null ? `${l.grader} ${l.grade}` : null,
+                            l.printing,
+                            l.ageDays != null
+                              ? l.ageDays === 0 ? "listed today" : `listed ${l.ageDays}d ago`
+                              : null,
+                          ].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                      <span className="search-listing-price">
+                        {l.price != null && <Money v={l.price} unit={l.currency} showSource={false} />}
+                      </span>
+                    </a>
+                  ))}
+                </div>
               )}
             </div>
           )}

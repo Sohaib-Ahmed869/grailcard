@@ -10,6 +10,7 @@
 // the product quotes two prices for one card.
 
 import { similarity } from "./similarity.js";
+import { fetchListings } from "./ebaylistings.js";
 
 const TCGDEX_ROOT = (process.env.TCGDEX_URL ?? "https://api.tcgdex.net/v2/en").replace(
   /\/(en|ja|fr|de|es|it|pt)$/,
@@ -285,15 +286,25 @@ export async function searchCards(q: string, limit = 24): Promise<SearchHit[]> {
   // Offered as a clearly-labelled last entry rather than mixed in, so a real
   // catalogue hit always wins.
   if (all.length === 0 && (name.length >= 3 || code)) {
+    const marketName = [name, variant].filter(Boolean).join(" ").trim() || raw;
+    // A seller's photo is the only picture of this card that exists for us, and
+    // a result with no image reads as a result with nothing behind it.
+    let imageUrl: string | null = null;
+    try {
+      const probe = await fetchListings({ name: marketName, number: code, limit: 4 });
+      imageUrl = probe?.listings.find((l) => l.imageUrl)?.imageUrl ?? null;
+    } catch {
+      // a missing thumbnail is not worth failing a search over
+    }
     all.push({
       cardId: "market",
-      name: [name, variant].filter(Boolean).join(" ").trim() || raw,
+      name: marketName,
       nameLocal: null,
       setId: "",
       setName: "priced from live listings — not in a catalogue we hold",
       localId: code ?? "",
       rarity: variant,
-      imageUrl: null,
+      imageUrl,
       game: "other",
       score: 0.5,
     });

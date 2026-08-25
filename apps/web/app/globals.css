@@ -1971,3 +1971,30 @@ button.primary:disabled {
   background: var(--bg); color: var(--text); cursor: pointer;
 }
 .search-hit-meta.market { color: var(--accent); }
+
+/* the card you picked, pictured — for a card no catalog covers, a listing
+   photo is the only image of it that exists */
+.search-picked { display: flex; gap: 11px; align-items: flex-start; }
+.search-picked-img {
+  width: 52px; height: 73px; object-fit: cover; border-radius: 4px; flex: 0 0 52px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.search-picked-img.placeholder { display: block; }
+
+.search-listings { margin-top: 14px; display: flex; flex-direction: column; gap: 5px; }
+.search-listings .label-mono { font-size: 9.5px; letter-spacing: .14em; color: var(--muted); }
+.search-listing {
+  display: flex; gap: 10px; align-items: center; text-decoration: none; color: inherit;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+}
+.search-listing:hover { border-color: var(--accent); }
+.search-listing img { width: 30px; height: 42px; object-fit: cover; border-radius: 3px; flex: 0 0 30px; }
+.search-listing-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.search-listing-title {
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.search-listing-meta { font-size: 10px; color: var(--muted); }
+.search-listing-price {
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
