@@ -111,3 +111,19 @@ test("grading furniture is never mistaken for a card name", () => {
   );
   assert.equal(labelDisplayName(null), null);
 });
+
+import { readQuery } from "../src/scans/search.js";
+
+test("a pasted marketplace title is pulled apart, not searched whole", () => {
+  // exactly what a user pasted; every catalogue matches nothing as written
+  assert.deepEqual(readQuery("Son Gohan : Adolescence - FB08-001 (Alternate Art)"), {
+    name: "Son Gohan : Adolescence",
+    code: "FB08-001",
+    // the parenthetical is the printing — the difference between $2 and $200
+    variant: "Alternate Art",
+  });
+  assert.deepEqual(readQuery("Umbreon VMAX"), { name: "Umbreon VMAX", code: null, variant: null });
+  assert.equal(readQuery("OP13-119").code, "OP13-119");
+  assert.equal(readQuery("Portgas.D.Ace (119) (Parallel) OP13-119").code, "OP13-119");
+  assert.equal(readQuery("Portgas.D.Ace (119) (Parallel) OP13-119").name, "Portgas.D.Ace");
+});

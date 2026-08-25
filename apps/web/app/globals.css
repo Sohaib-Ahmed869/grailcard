@@ -1970,3 +1970,4 @@ button.primary:disabled {
   border: 1px solid var(--line); border-radius: 7px;
   background: var(--bg); color: var(--text); cursor: pointer;
 }
+.search-hit-meta.market { color: var(--accent); }

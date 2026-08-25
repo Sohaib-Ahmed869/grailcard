@@ -1737,15 +1737,44 @@ function SearchPanel() {
   const [pricing, setPricing] = useState(false);
   const [open, setOpen] = useState(false);
 
+  const [why, setWhy] = useState<string | null>(null);
+
   async function run(e?: React.FormEvent) {
     e?.preventDefault();
     if (q.trim().length < 2) return;
-    setState("loading"); setPicked(null); setPrice(null);
-    try {
-      const r = await fetch(`${API}/market/search?q=${encodeURIComponent(q)}&limit=24`);
-      const j = await r.json();
-      setHits(j.results ?? []); setState("done");
-    } catch { setState("error"); }
+    setState("loading"); setPicked(null); setPrice(null); setWhy(null);
+
+    // One retry, because the common failure here is not a broken search but a
+    // server that happened to be restarting — a dev reload, or a hosted
+    // instance waking from sleep. Reporting that as "unavailable" sends people
+    // to debug a system that is about to work.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await fetch(`${API}/market/search?q=${encodeURIComponent(q)}&limit=24`, {
+          signal: AbortSignal.timeout(25000),
+        });
+        if (!r.ok) {
+          setWhy(`the search service answered ${r.status}`);
+          setState("error");
+          return;
+        }
+        const j = await r.json();
+        setHits(j.results ?? []); setState("done");
+        return;
+      } catch (err) {
+        const e = err as Error;
+        if (attempt === 0) {
+          await new Promise((res) => setTimeout(res, 900));
+          continue;
+        }
+        setWhy(
+          e.name === "TimeoutError"
+            ? "the search service did not answer in time"
+            : `could not reach the search service at ${API}`,
+        );
+        setState("error");
+      }
+    }
   }
 
   // The grader and grade are part of the question, so changing either asks it
@@ -1794,10 +1823,23 @@ function SearchPanel() {
             </button>
           </form>
 
-          {state === "error" && <p className="note">Search is unavailable right now.</p>}
+          {state === "error" && (
+            <p className="note">
+              Search didn&apos;t run — {why ?? "the request failed"}. Try again; if it keeps
+              failing the API may not be running.
+            </p>
+          )}
           {state === "done" && hits?.length === 0 && (
             <p className="note">
-              Nothing matched “{q}”. Try the card&apos;s printed name, or its number.
+              Nothing matched “{q}” — not in any catalogue we hold, and no listings for it
+              either. Try the card&apos;s printed name, or its number.
+            </p>
+          )}
+          {hits?.length === 1 && hits[0].cardId === "market" && (
+            <p className="note">
+              No catalogue we hold covers this card, so it is priced straight from what the
+              market is doing with it. Identification is yours, not ours — check the listing
+              titles below match the copy you have.
             </p>
           )}
 
@@ -1815,9 +1857,12 @@ function SearchPanel() {
                   <span className="search-hit-text">
                     <span className="search-hit-name">{h.name}</span>
                     {h.nameLocal && <span className="search-hit-local" lang="ja">{h.nameLocal}</span>}
-                    <span className="search-hit-meta">
-                      {[h.setName || h.setId, h.localId ? `#${h.localId}` : null, h.rarity]
-                        .filter(Boolean).join(" · ")}
+                    <span className={`search-hit-meta${h.cardId === "market" ? " market" : ""}`}>
+                      {h.cardId === "market"
+                        ? [h.localId ? `#${h.localId}` : null, "priced from live listings"]
+                            .filter(Boolean).join(" · ")
+                        : [h.setName || h.setId, h.localId ? `#${h.localId}` : null, h.rarity]
+                            .filter(Boolean).join(" · ")}
                     </span>
                   </span>
                 </button>

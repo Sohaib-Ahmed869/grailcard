@@ -16,6 +16,7 @@ if (existsSync(envPath)) {
 
 import { AppModule } from "./app.module.js";
 import { initStore, storeConfigured } from "./cards.store.js";
+import { warmSearchIndex } from "./scans/search.js";
 
 const PORT = Number(process.env.PORT ?? 8180);
 
@@ -29,6 +30,8 @@ async function bootstrap() {
 
   await app.listen(PORT);
   console.log(`grailcard api listening on http://localhost:${PORT}`);
+  // not awaited: the server is already answering, this just fills a cache
+  warmSearchIndex();
 }
 
 bootstrap();

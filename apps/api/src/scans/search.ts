@@ -31,6 +31,35 @@ export type SearchHit = {
   score: number;
 };
 
+/** Pull a pasted card title apart.
+ *
+ *  People paste what a marketplace shows them — "Son Gohan : Adolescence -
+ *  FB08-001 (Alternate Art)" — and every catalogue here wants only the name.
+ *  The code and the parenthetical are not noise though: the code is an exact
+ *  address, and the parenthetical is usually the printing, which is the
+ *  difference between a $2 card and a $200 one. So they are separated out and
+ *  kept rather than stripped.
+ */
+export function readQuery(raw: string): { name: string; code: string | null; variant: string | null } {
+  let q = raw.trim();
+  // any game's "LETTERS##-###" address
+  const code = /\b([A-Z]{2,4}\d{2})\s*-\s*(\d{2,3})\b/i.exec(q);
+  if (code) q = q.replace(code[0], " ");
+  const variant = [...q.matchAll(/\(([^)]{2,40})\)/g)].map((m) => m[1].trim()).join(" ") || null;
+  q = q.replace(/\([^)]*\)/g, " ");
+  const name = q
+    .replace(/\s*[-–—:]\s*$/g, " ")
+    .replace(/[^\w\s'’.:-]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, "")
+    .trim();
+  return {
+    name,
+    code: code ? `${code[1].toUpperCase()}-${code[2]}` : null,
+    variant,
+  };
+}
+
 const TTL_MS = 60 * 60 * 1000;
 const cache = new Map<string, { at: number; v: SearchHit[] }>();
 
@@ -158,6 +187,29 @@ async function onePiece(q: string): Promise<SearchHit[]> {
     .slice(0, 24);
 }
 
+/** Yu-Gi-Oh, via YGOPRODeck. Free, no key, and it does its own fuzzy match. */
+async function yugioh(q: string): Promise<SearchHit[]> {
+  const body = await getJson(
+    `https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${encodeURIComponent(q)}&num=20&offset=0`,
+  );
+  const cards = (body?.data ?? []) as any[];
+  return cards.slice(0, 20).map((c) => {
+    const set = (c.card_sets ?? [])[0] ?? {};
+    return {
+      cardId: `ygo-${c.id}`,
+      name: c.name,
+      nameLocal: null,
+      setId: String(set.set_code ?? "").split("-")[0],
+      setName: set.set_name ?? "",
+      localId: String(set.set_code ?? ""),
+      rarity: set.set_rarity ?? null,
+      imageUrl: (c.card_images ?? [])[0]?.image_url ?? null,
+      game: "yugioh",
+      score: similarity(q, c.name ?? ""),
+    };
+  });
+}
+
 /** Fill in the set name and rarity a list endpoint does not carry.
  *  Only for the handful actually shown — a detail call per result would turn
  *  one search into forty. */
@@ -174,25 +226,48 @@ async function enrich(hits: SearchHit[], locale: "en" | "ja"): Promise<void> {
   );
 }
 
+/** Build the One Piece index ahead of any request.
+ *
+ *  It costs thirty outbound calls and about twelve seconds, and whoever
+ *  searched first used to pay for all of it — a twelve second wait on a search
+ *  box reads as broken, not slow. Done at boot it costs nobody anything. */
+export function warmSearchIndex(): void {
+  if (opIndex || opBuilding) return;
+  opBuilding = buildOnePieceIndex()
+    .then((idx) => {
+      opIndex = idx;
+      console.log(`[search] One Piece index ready — ${idx.length} cards`);
+      return idx;
+    })
+    .catch(() => {
+      // a failed warm-up must not poison the cache; the next search retries
+      opBuilding = null;
+      return [];
+    });
+}
+
 export async function searchCards(q: string, limit = 24): Promise<SearchHit[]> {
-  const query = q.trim();
-  if (query.length < 2) return [];
-  const key = `${query.toLowerCase()}|${limit}`;
+  const raw = q.trim();
+  if (raw.length < 2) return [];
+  const key = `${raw.toLowerCase()}|${limit}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.v;
 
-  const [en, ja, mtg, op] = await Promise.all([
+  // Search the NAME, not the pasted title. "Son Gohan : Adolescence - FB08-001
+  // (Alternate Art)" matches nothing in any catalogue as written.
+  const { name, code, variant } = readQuery(raw);
+  const query = name || raw;
+
+  const [en, ja, mtg, op, ygo] = await Promise.all([
     pokemon(query, "en"),
     pokemon(query, "ja"),
     magic(query),
-    onePiece(query),
+    onePiece(code ? raw : query),
+    yugioh(query),
   ]);
 
-  // A Japanese hit is only worth showing when it is a real name match. The ja
-  // catalog names cards in Japanese, so an English query scores near zero
-  // against most of it and would otherwise fill the list with noise.
   const jaKept = ja.filter((h) => h.score >= 0.55);
-  const all = [...en, ...jaKept, ...mtg, ...op]
+  const all = [...en, ...jaKept, ...mtg, ...op, ...ygo]
     .filter((h) => h.score >= 0.4)
     .sort((a, b) => b.score - a.score || a.name.length - b.name.length)
     .slice(0, limit);
@@ -201,6 +276,28 @@ export async function searchCards(q: string, limit = 24): Promise<SearchHit[]> {
     enrich(all.filter((h) => en.includes(h)), "en"),
     enrich(all.filter((h) => jaKept.includes(h)), "ja"),
   ]);
+
+  // No catalogue we hold covers every game — Dragon Ball Fusion World, Gundam,
+  // Union Arena, sports. A card we cannot name in a catalogue can still be
+  // priced from what the market is doing with it, and refusing to try means
+  // answering "no such card" about a card the user is holding.
+  //
+  // Offered as a clearly-labelled last entry rather than mixed in, so a real
+  // catalogue hit always wins.
+  if (all.length === 0 && (name.length >= 3 || code)) {
+    all.push({
+      cardId: "market",
+      name: [name, variant].filter(Boolean).join(" ").trim() || raw,
+      nameLocal: null,
+      setId: "",
+      setName: "priced from live listings — not in a catalogue we hold",
+      localId: code ?? "",
+      rarity: variant,
+      imageUrl: null,
+      game: "other",
+      score: 0.5,
+    });
+  }
 
   cache.set(key, { at: Date.now(), v: all });
   return all;
